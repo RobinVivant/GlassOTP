@@ -1,0 +1,576 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00351B365E1744A66F71B2F3 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BCA40793082F5FF0338C65B /* DesignSystem.swift */; };
+		28B42BF711499C5575132465 /* OTPCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C40D0314FC4881D1AC573F6E /* OTPCardView.swift */; };
+		5A7910CEA36108A34B4C7711 /* OTPWidgetIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E162C1B68F1B0706930909D6 /* OTPWidgetIntents.swift */; };
+		6A712E074B7DE9A273F64DDC /* VaultHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BA990EBAB0B5EBFF445AAC5 /* VaultHomeView.swift */; };
+		72027D67D8CBD6D3030FF5D8 /* FoldersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B832CCF85C60E594B0F9FD67 /* FoldersView.swift */; };
+		7AC48D86115DA5EB572B1344 /* GlassOTPWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2E48BB15F978C2031033C90 /* GlassOTPWidget.swift */; };
+		7DB141796309FBDD1BF4F7BE /* GlassOTPCore in Frameworks */ = {isa = PBXBuildFile; productRef = 44F9253C87A4A938F90C3A29 /* GlassOTPCore */; };
+		8388B499BD83D98EDBEEB685 /* GlassOTPWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C2E009883A7973278D529460 /* GlassOTPWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		85E6EC2E914A07E1F33A46EF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 64F57F1FE83BCA82AB97DE76 /* Assets.xcassets */; };
+		9F5DCB7424BE57FB2A515F72 /* GlassOTPCore in Frameworks */ = {isa = PBXBuildFile; productRef = 133EA85F372A6E078773D010 /* GlassOTPCore */; };
+		A04881A92B70B2878BA2B69B /* BiometricLockOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CF65E83347CE7090B421C2D /* BiometricLockOverlay.swift */; };
+		A4F517900253B49E5E575A04 /* BiometricLockManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A2FBF4498DD3D22125408AC /* BiometricLockManager.swift */; };
+		A546BC2E54BED5D2828845B8 /* OTPAuthImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 283B9C8C4CDC67212DD2BF7B /* OTPAuthImportSheet.swift */; };
+		BD4729DDAFC4CF9971CAF2A4 /* AccountQRDetailSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 149761E09AFDC6C4F600434F /* AccountQRDetailSheet.swift */; };
+		E01279E81EE0B05DADCBA3D2 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17889AC70F5DF240C4A9326F /* RootTabView.swift */; };
+		E9E0C8448E8B78BD3CA45FA2 /* AccountEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DDC569CABAA0C72912CE28E /* AccountEditorSheet.swift */; };
+		F3D8CE57EBB614D72234A638 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F72F99A0C7E23E0AAEA77B8 /* SettingsView.swift */; };
+		F52E42B801126068939632FD /* QRScannerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2FDE297460DF25C78D9014 /* QRScannerSheet.swift */; };
+		F5F8C82244B91194F092CD61 /* GlassOTPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C4610A0257C0DC875DCE517 /* GlassOTPApp.swift */; };
+		F65A637DBFDC1DF33760E68F /* VaultViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 579D811F9A923199785B8048 /* VaultViewModel.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		F661B2026A1F4362377900A8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6A181EB4D1257AA0F9FB2945 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 829CBCC7D93CA06849012DB0;
+			remoteInfo = GlassOTPWidgetExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		F9BD6C1F40953CFADE048860 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				8388B499BD83D98EDBEEB685 /* GlassOTPWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0B2FDE297460DF25C78D9014 /* QRScannerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerSheet.swift; sourceTree = "<group>"; };
+		149761E09AFDC6C4F600434F /* AccountQRDetailSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountQRDetailSheet.swift; sourceTree = "<group>"; };
+		17889AC70F5DF240C4A9326F /* RootTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootTabView.swift; sourceTree = "<group>"; };
+		1A3F01B5BA17176B9DA52DF2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		1BA990EBAB0B5EBFF445AAC5 /* VaultHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultHomeView.swift; sourceTree = "<group>"; };
+		283B9C8C4CDC67212DD2BF7B /* OTPAuthImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPAuthImportSheet.swift; sourceTree = "<group>"; };
+		3C4610A0257C0DC875DCE517 /* GlassOTPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassOTPApp.swift; sourceTree = "<group>"; };
+		3F72F99A0C7E23E0AAEA77B8 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		579D811F9A923199785B8048 /* VaultViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultViewModel.swift; sourceTree = "<group>"; };
+		5BCA40793082F5FF0338C65B /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
+		5CF65E83347CE7090B421C2D /* BiometricLockOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiometricLockOverlay.swift; sourceTree = "<group>"; };
+		64F57F1FE83BCA82AB97DE76 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7308BE5A7E0C29EC146D8E79 /* GlassOTPCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GlassOTPCore; path = Packages/GlassOTPCore; sourceTree = SOURCE_ROOT; };
+		7A2FBF4498DD3D22125408AC /* BiometricLockManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiometricLockManager.swift; sourceTree = "<group>"; };
+		9DDC569CABAA0C72912CE28E /* AccountEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountEditorSheet.swift; sourceTree = "<group>"; };
+		B832CCF85C60E594B0F9FD67 /* FoldersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoldersView.swift; sourceTree = "<group>"; };
+		C2E009883A7973278D529460 /* GlassOTPWidgetExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = GlassOTPWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C2E48BB15F978C2031033C90 /* GlassOTPWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassOTPWidget.swift; sourceTree = "<group>"; };
+		C3B8D812E5325E585CD1749A /* GlassOTPWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GlassOTPWidget.entitlements; sourceTree = "<group>"; };
+		C40D0314FC4881D1AC573F6E /* OTPCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPCardView.swift; sourceTree = "<group>"; };
+		E162C1B68F1B0706930909D6 /* OTPWidgetIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPWidgetIntents.swift; sourceTree = "<group>"; };
+		E6A2C7A2A67CD84D3A28B2DF /* GlassOTP.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GlassOTP.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		59233DF30C0C0C0D5294B1F6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9F5DCB7424BE57FB2A515F72 /* GlassOTPCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CC4B60B650190D14FA9DB356 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7DB141796309FBDD1BF4F7BE /* GlassOTPCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		06367589194005080E1CBB9D /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				3C4610A0257C0DC875DCE517 /* GlassOTPApp.swift */,
+				689E1FA28144AFA88EA91B02 /* ViewModels */,
+				C9CCDA0585B62029197E36DB /* Views */,
+			);
+			name = Sources;
+			path = GlassOTP/Sources;
+			sourceTree = "<group>";
+		};
+		2E9443A3FFA6158624A89297 = {
+			isa = PBXGroup;
+			children = (
+				9DB1D8E1DDFBA71EBCC01CD6 /* GlassOTPWidget */,
+				625D21E1B8BCEEFBC8227A97 /* Packages */,
+				64DBE780B816A1D2D37A4E17 /* Resources */,
+				06367589194005080E1CBB9D /* Sources */,
+				56806BB8D01E88DF7615C2FF /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		56806BB8D01E88DF7615C2FF /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				E6A2C7A2A67CD84D3A28B2DF /* GlassOTP.app */,
+				C2E009883A7973278D529460 /* GlassOTPWidgetExtension.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		625D21E1B8BCEEFBC8227A97 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				7308BE5A7E0C29EC146D8E79 /* GlassOTPCore */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		64DBE780B816A1D2D37A4E17 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				64F57F1FE83BCA82AB97DE76 /* Assets.xcassets */,
+			);
+			name = Resources;
+			path = GlassOTP/Resources;
+			sourceTree = "<group>";
+		};
+		689E1FA28144AFA88EA91B02 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				7A2FBF4498DD3D22125408AC /* BiometricLockManager.swift */,
+				579D811F9A923199785B8048 /* VaultViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		9DB1D8E1DDFBA71EBCC01CD6 /* GlassOTPWidget */ = {
+			isa = PBXGroup;
+			children = (
+				C3B8D812E5325E585CD1749A /* GlassOTPWidget.entitlements */,
+				C2E48BB15F978C2031033C90 /* GlassOTPWidget.swift */,
+				1A3F01B5BA17176B9DA52DF2 /* Info.plist */,
+				E162C1B68F1B0706930909D6 /* OTPWidgetIntents.swift */,
+			);
+			path = GlassOTPWidget;
+			sourceTree = "<group>";
+		};
+		C9CCDA0585B62029197E36DB /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				9DDC569CABAA0C72912CE28E /* AccountEditorSheet.swift */,
+				149761E09AFDC6C4F600434F /* AccountQRDetailSheet.swift */,
+				5CF65E83347CE7090B421C2D /* BiometricLockOverlay.swift */,
+				5BCA40793082F5FF0338C65B /* DesignSystem.swift */,
+				B832CCF85C60E594B0F9FD67 /* FoldersView.swift */,
+				283B9C8C4CDC67212DD2BF7B /* OTPAuthImportSheet.swift */,
+				C40D0314FC4881D1AC573F6E /* OTPCardView.swift */,
+				0B2FDE297460DF25C78D9014 /* QRScannerSheet.swift */,
+				17889AC70F5DF240C4A9326F /* RootTabView.swift */,
+				3F72F99A0C7E23E0AAEA77B8 /* SettingsView.swift */,
+				1BA990EBAB0B5EBFF445AAC5 /* VaultHomeView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		64FDCCE2DF0E2E4C1DA42444 /* GlassOTP */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B4D6910B2A635F7AC6C1C1CA /* Build configuration list for PBXNativeTarget "GlassOTP" */;
+			buildPhases = (
+				6400F439CC2F26E45AF6F731 /* Sources */,
+				F511BA13A21C9FD69A5FF5B1 /* Resources */,
+				59233DF30C0C0C0D5294B1F6 /* Frameworks */,
+				F9BD6C1F40953CFADE048860 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				94C9C970123A511DD8C32A89 /* PBXTargetDependency */,
+			);
+			name = GlassOTP;
+			packageProductDependencies = (
+				133EA85F372A6E078773D010 /* GlassOTPCore */,
+			);
+			productName = GlassOTP;
+			productReference = E6A2C7A2A67CD84D3A28B2DF /* GlassOTP.app */;
+			productType = "com.apple.product-type.application";
+		};
+		829CBCC7D93CA06849012DB0 /* GlassOTPWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EDDD17D6274BEDE223A4AE1F /* Build configuration list for PBXNativeTarget "GlassOTPWidgetExtension" */;
+			buildPhases = (
+				A0E2899C2E1D90D1A411FF15 /* Sources */,
+				CC4B60B650190D14FA9DB356 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = GlassOTPWidgetExtension;
+			packageProductDependencies = (
+				44F9253C87A4A938F90C3A29 /* GlassOTPCore */,
+			);
+			productName = GlassOTPWidgetExtension;
+			productReference = C2E009883A7973278D529460 /* GlassOTPWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		6A181EB4D1257AA0F9FB2945 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					64FDCCE2DF0E2E4C1DA42444 = {
+						DevelopmentTeam = "";
+					};
+					829CBCC7D93CA06849012DB0 = {
+						DevelopmentTeam = "";
+					};
+				};
+			};
+			buildConfigurationList = C7C978CBEEBAF32F8C9C3C4E /* Build configuration list for PBXProject "GlassOTP" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 2E9443A3FFA6158624A89297;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				1A43DB75F5D5460BC5CAD6DC /* XCLocalSwiftPackageReference "Packages/GlassOTPCore" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 56806BB8D01E88DF7615C2FF /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				64FDCCE2DF0E2E4C1DA42444 /* GlassOTP */,
+				829CBCC7D93CA06849012DB0 /* GlassOTPWidgetExtension */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F511BA13A21C9FD69A5FF5B1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				85E6EC2E914A07E1F33A46EF /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		6400F439CC2F26E45AF6F731 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E9E0C8448E8B78BD3CA45FA2 /* AccountEditorSheet.swift in Sources */,
+				BD4729DDAFC4CF9971CAF2A4 /* AccountQRDetailSheet.swift in Sources */,
+				A4F517900253B49E5E575A04 /* BiometricLockManager.swift in Sources */,
+				A04881A92B70B2878BA2B69B /* BiometricLockOverlay.swift in Sources */,
+				00351B365E1744A66F71B2F3 /* DesignSystem.swift in Sources */,
+				72027D67D8CBD6D3030FF5D8 /* FoldersView.swift in Sources */,
+				F5F8C82244B91194F092CD61 /* GlassOTPApp.swift in Sources */,
+				A546BC2E54BED5D2828845B8 /* OTPAuthImportSheet.swift in Sources */,
+				28B42BF711499C5575132465 /* OTPCardView.swift in Sources */,
+				F52E42B801126068939632FD /* QRScannerSheet.swift in Sources */,
+				E01279E81EE0B05DADCBA3D2 /* RootTabView.swift in Sources */,
+				F3D8CE57EBB614D72234A638 /* SettingsView.swift in Sources */,
+				6A712E074B7DE9A273F64DDC /* VaultHomeView.swift in Sources */,
+				F65A637DBFDC1DF33760E68F /* VaultViewModel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A0E2899C2E1D90D1A411FF15 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7AC48D86115DA5EB572B1344 /* GlassOTPWidget.swift in Sources */,
+				5A7910CEA36108A34B4C7711 /* OTPWidgetIntents.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		94C9C970123A511DD8C32A89 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 829CBCC7D93CA06849012DB0 /* GlassOTPWidgetExtension */;
+			targetProxy = F661B2026A1F4362377900A8 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		04180F0D8982D7422F4EE0DE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		1431CEFBDA913555D284B6ED /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = GlassOTPWidget/GlassOTPWidget.entitlements;
+				INFOPLIST_FILE = GlassOTPWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.robinvivant.glassotp.widget;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		B7882DC427EEE60E2B25CEDB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = GlassOTPWidget/GlassOTPWidget.entitlements;
+				INFOPLIST_FILE = GlassOTPWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.robinvivant.glassotp.widget;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		CE937E405C211C0370A14F42 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		F371E45F411B652018DF09A7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = GlassOTP/GlassOTP.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = GlassOTP/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.robinvivant.glassotp;
+				SDKROOT = iphoneos;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		F8B9EC1B0C54FC3CB816C5DA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = GlassOTP/GlassOTP.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = GlassOTP/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.robinvivant.glassotp;
+				SDKROOT = iphoneos;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B4D6910B2A635F7AC6C1C1CA /* Build configuration list for PBXNativeTarget "GlassOTP" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F8B9EC1B0C54FC3CB816C5DA /* Debug */,
+				F371E45F411B652018DF09A7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C7C978CBEEBAF32F8C9C3C4E /* Build configuration list for PBXProject "GlassOTP" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CE937E405C211C0370A14F42 /* Debug */,
+				04180F0D8982D7422F4EE0DE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EDDD17D6274BEDE223A4AE1F /* Build configuration list for PBXNativeTarget "GlassOTPWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B7882DC427EEE60E2B25CEDB /* Debug */,
+				1431CEFBDA913555D284B6ED /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		1A43DB75F5D5460BC5CAD6DC /* XCLocalSwiftPackageReference "Packages/GlassOTPCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/GlassOTPCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		133EA85F372A6E078773D010 /* GlassOTPCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GlassOTPCore;
+		};
+		44F9253C87A4A938F90C3A29 /* GlassOTPCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GlassOTPCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 6A181EB4D1257AA0F9FB2945 /* Project object */;
+}

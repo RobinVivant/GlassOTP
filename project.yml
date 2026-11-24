@@ -1,0 +1,66 @@
+name: GlassOTP
+options:
+  bundleIdPrefix: com.robinvivant
+  deploymentTarget:
+    iOS: "26.0"
+  xcodeVersion: "27.0"
+  defaultConfig: Debug
+
+packages:
+  GlassOTPCore:
+    path: Packages/GlassOTPCore
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  GlassOTP:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: GlassOTP/Sources
+      - path: GlassOTP/Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.robinvivant.glassotp
+        INFOPLIST_FILE: GlassOTP/Info.plist
+        CODE_SIGN_ENTITLEMENTS: GlassOTP/GlassOTP.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+    dependencies:
+      - package: GlassOTPCore
+      - target: GlassOTPWidgetExtension
+        embed: true
+
+  GlassOTPWidgetExtension:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: GlassOTPWidget
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.robinvivant.glassotp.widget
+        INFOPLIST_FILE: GlassOTPWidget/Info.plist
+        CODE_SIGN_ENTITLEMENTS: GlassOTPWidget/GlassOTPWidget.entitlements
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: GlassOTPCore
+
+schemes:
+  GlassOTP:
+    build:
+      targets:
+        GlassOTP: all
+        GlassOTPWidgetExtension: all
+    run:
+      config: Debug
+    archive:
+      config: Release
