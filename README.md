@@ -1,5 +1,7 @@
 # GlassOTP
 
+![GlassOTP](assets/github-social-preview.png)
+
 A modern iOS 26 / iOS 27 two-factor authentication (TOTP/HOTP) app featuring native **Liquid Glass** UI, interactive Home & Lock Screen widgets, Face ID / Touch ID vault protection, iCloud Keychain sync, and seamless **100% on-device migration from OTP Auth** (`.otpauthdb` & `.otpauth`).
 
 ## Importing from OTP Auth (`de.cooperrs.Authenticator`)
