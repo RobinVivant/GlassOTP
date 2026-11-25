@@ -127,7 +127,7 @@ final class MacVaultViewModel {
     @ObservationIgnored private var accountTombstones: [OTPTombstone] = []
     @ObservationIgnored private var folderTombstones: [OTPTombstone] = []
     @ObservationIgnored private var storeGeneration: UInt64 = 0
-    @ObservationIgnored private var hasCompletedInitialLoad = false
+    @ObservationIgnored private var copyRequestID: UInt64 = 0
 
     private static let quickPickerKey = "glassotp.mac.quickPickerHotKey"
     private static let accountHotKeysKey = "glassotp.mac.accountHotKeys"
@@ -283,18 +283,20 @@ final class MacVaultViewModel {
         lastSyncDate = Date()
         hasLoadError = false
         syncError = nil
+        consumePeerRetirementNoticeIfNeeded()
+    }
+
+    private func consumePeerRetirementNoticeIfNeeded() {
+        if store.consumePendingPeerRetirementNotice() {
+            alertMessage = "Another device turned off iCloud Keychain Sync and deleted the cloud copy. This Mac now stores your vault locally."
+        }
     }
 
     func reloadFromStore() {
-        let prevSync = iCloudSyncEnabled
-        defer { hasCompletedInitialLoad = true }
         storeGeneration &+= 1
         do {
             let snapshot = try store.loadSnapshot()
             applyLoadedSnapshot(snapshot)
-            if hasCompletedInitialLoad && prevSync && !iCloudSyncEnabled {
-                alertMessage = "Another device turned off iCloud Keychain Sync and deleted the cloud copy. This Mac now stores your vault locally."
-            }
         } catch {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
@@ -306,28 +308,23 @@ final class MacVaultViewModel {
     func reloadFromStoreAsync() async {
         let store = self.store
         let expectedGeneration = storeGeneration
-        let prevSync = iCloudSyncEnabled
         do {
             let loaded = try await Task.detached(priority: .utility) {
                 try store.loadSnapshot()
             }.value
             guard !Task.isCancelled, storeGeneration == expectedGeneration else { return }
             applyLoadedSnapshot(loaded)
-            if hasCompletedInitialLoad && prevSync && !iCloudSyncEnabled {
-                alertMessage = "Another device turned off iCloud Keychain Sync and deleted the cloud copy. This Mac now stores your vault locally."
-            }
-            hasCompletedInitialLoad = true
         } catch {
             guard !Task.isCancelled, storeGeneration == expectedGeneration else { return }
             iCloudSyncEnabled = store.isICloudSyncEnabled()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             hasLoadError = true
             syncError = error.localizedDescription
-            hasCompletedInitialLoad = true
         }
     }
 
     func updateICloudSync(enabled: Bool, removeFromICloud: Bool = true) {
+        let prevSync = iCloudSyncEnabled
         storeGeneration &+= 1
         do {
             let migrated = try store.setICloudSyncEnabled(enabled, removeOppositeBucket: removeFromICloud)
@@ -338,17 +335,23 @@ final class MacVaultViewModel {
             } else {
                 hasLoadError = false
                 syncError = nil
+                consumePeerRetirementNoticeIfNeeded()
             }
         } catch let error as KeychainVaultError {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             if case .cloudCleanupFailed = error {
                 reloadFromStore()
+            } else if iCloudSyncEnabled != prevSync || hasPendingICloudCleanup {
+                reloadFromStore()
             }
             alertMessage = error.localizedDescription
         } catch {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if iCloudSyncEnabled != prevSync || hasPendingICloudCleanup {
+                reloadFromStore()
+            }
             alertMessage = error.localizedDescription
         }
     }
@@ -364,6 +367,8 @@ final class MacVaultViewModel {
                 alertMessage = "Deleted the leftover iCloud Keychain copy."
             case .localCleanupOnlyPeerSuperseded:
                 alertMessage = "Finished local cleanup. Another device had already re-enabled iCloud Keychain Sync, so its cloud vault was kept."
+            case .localCleanupOnlyCloudUnverified:
+                alertMessage = "Finished local cleanup, but couldn't verify the current iCloud Keychain status."
             }
         } catch {
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
@@ -437,31 +442,57 @@ final class MacVaultViewModel {
         let store = self.store
         storeGeneration &+= 1
         let expectedGeneration = storeGeneration
+        copyRequestID &+= 1
+        let capturedCopyRequestID = copyRequestID
         let outcome: (snapshot: OTPVaultSnapshot?, account: OTPAccount?, didMutate: Bool)
+        let wasSupersededByStoreChange: Bool
 
         do {
             outcome = try await Task.detached(priority: .userInitiated) {
                 try store.resolveAccountForCopy(accountID: accountID)
             }.value
 
-            if storeGeneration == expectedGeneration {
+            wasSupersededByStoreChange = (storeGeneration != expectedGeneration)
+            if !wasSupersededByStoreChange {
                 if let updatedSnapshot = outcome.snapshot {
                     applyLoadedSnapshot(updatedSnapshot)
                 } else {
                     reloadFromStore()
+                    guard copyRequestID == capturedCopyRequestID else {
+                        return false
+                    }
                     return fail("That account is no longer in your vault.")
                 }
             } else {
                 reloadFromStore()
             }
         } catch {
+            guard copyRequestID == capturedCopyRequestID else {
+                return false
+            }
             syncError = error.localizedDescription
             return fail(error.localizedDescription)
         }
 
-        guard let effectiveAccount = outcome.account else {
+        guard copyRequestID == capturedCopyRequestID else {
+            return false
+        }
+        guard let resolvedAccount = outcome.account else {
             return fail("That account is no longer in your vault.")
         }
+
+        let effectiveAccount: OTPAccount
+        if wasSupersededByStoreChange {
+            guard !hasLoadError,
+                  let currentAccount = accounts.first(where: { $0.id == resolvedAccount.id }),
+                  currentAccount.hasSameCredentialIdentity(as: resolvedAccount) else {
+                return false
+            }
+            effectiveAccount = resolvedAccount.type == .hotp ? resolvedAccount : currentAccount
+        } else {
+            effectiveAccount = resolvedAccount
+        }
+
         guard effectiveAccount.isSupportedAlgorithm else {
             return fail("\(effectiveAccount.displayTitle) uses legacy \(effectiveAccount.algorithm.displayName), which GlassOTP no longer generates.")
         }

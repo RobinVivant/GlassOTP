@@ -41,6 +41,20 @@ struct AccountEditorSheet: View {
         _showAdvanced = State(initialValue: account?.algorithm == .md5)
     }
 
+    private var validFolderSelection: Binding<UUID?> {
+        Binding(
+            get: {
+                guard let fid = folderID, vault.folders.contains(where: { $0.id == fid }) else {
+                    return nil
+                }
+                return fid
+            },
+            set: { newValue in
+                folderID = newValue
+            }
+        )
+    }
+
     private var decodedSecret: Data? {
         let trimmed = base32Secret.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let data = try? Base32.decode(trimmed), !data.isEmpty else {
@@ -130,7 +144,7 @@ struct AccountEditorSheet: View {
                         Toggle("Pin to Top & Widgets", isOn: $isPinned)
 
                         if !vault.folders.isEmpty {
-                            Picker("Folder", selection: $folderID) {
+                            Picker("Folder", selection: validFolderSelection) {
                                 Text("Uncategorized").tag(Optional<UUID>.none)
                                 ForEach(vault.folders) { folder in
                                     Label(folder.name, systemImage: folder.symbolName)
@@ -244,7 +258,7 @@ struct AccountEditorSheet: View {
                             digits: digits,
                             period: period,
                             counter: counter,
-                            folderID: folderID,
+                            folderID: validFolderSelection.wrappedValue,
                             isPinned: isPinned,
                             sortOrder: existingAccount?.sortOrder ?? vault.accounts.count,
                             createdAt: existingAccount?.createdAt ?? Date(),

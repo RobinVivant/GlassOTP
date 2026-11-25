@@ -198,6 +198,16 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         algorithm != .md5
     }
 
+    public func hasSameCredentialIdentity(as other: OTPAccount) -> Bool {
+        secret == other.secret
+            && type == other.type
+            && algorithm == other.algorithm
+            && digits == other.digits
+            && period == other.period
+            && credentialGeneration == other.credentialGeneration
+            && counterResetAt?.roundedEpochMillis == other.counterResetAt?.roundedEpochMillis
+    }
+
     internal var metadataTieBreakKey: String {
         let parts = [
             issuer,
