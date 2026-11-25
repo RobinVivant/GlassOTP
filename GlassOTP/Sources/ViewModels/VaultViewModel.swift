@@ -77,7 +77,7 @@ final class VaultViewModel {
         let reservedHOTPCode: String?
         let reservedHOTPFormattedCode: String?
         let expectedPostReservationCounter: UInt64?
-        let createdAt: Date
+        let createdAt: ContinuousClock.Instant
     }
 
     private let store: KeychainVaultStore
@@ -179,6 +179,7 @@ final class VaultViewModel {
     }
 
     func clearPendingForegroundCopy() {
+        copyRequestID &+= 1
         pendingForegroundCopy = nil
     }
 
@@ -303,8 +304,10 @@ final class VaultViewModel {
     func commitPendingForegroundCopyIfNeeded() {
         guard let pending = pendingForegroundCopy else { return }
         pendingForegroundCopy = nil
+        let age = pending.createdAt.duration(to: .now)
         guard !hasLoadError,
-              Date().timeIntervalSince(pending.createdAt) <= 10.0,
+              age >= .zero,
+              age <= .seconds(10),
               pending.requestID == copyRequestID,
               pending.lockEpoch == lockEpoch,
               let currentAccount = accounts.first(where: { $0.id == pending.account.id }),
@@ -417,6 +420,11 @@ final class VaultViewModel {
                 return
             }
 
+            let appState = UIApplication.shared.applicationState
+            guard appState != .background else {
+                return
+            }
+
             let generationDate = date ?? Date()
             let snapshot = OTPGenerator.snapshot(for: effectiveAccount, at: generationDate)
             OTPClipboardWriter.copyOTP(snapshot.code)
@@ -425,7 +433,7 @@ final class VaultViewModel {
             generator.prepare()
             generator.notificationOccurred(.success)
 
-            if UIApplication.shared.applicationState != .active {
+            if appState != .active {
                 pendingForegroundCopy = PendingForegroundCopy(
                     requestID: capturedCopyRequestID,
                     lockEpoch: capturedLockEpoch,
@@ -433,7 +441,7 @@ final class VaultViewModel {
                     reservedHOTPCode: effectiveAccount.type == .hotp ? snapshot.code : nil,
                     reservedHOTPFormattedCode: effectiveAccount.type == .hotp ? snapshot.formattedCode : nil,
                     expectedPostReservationCounter: effectiveAccount.type == .hotp ? (effectiveAccount.counter &+ 1) : nil,
-                    createdAt: Date()
+                    createdAt: .now
                 )
             }
 

@@ -9,6 +9,7 @@ All notable changes to GlassOTP are documented in this file.
 - True App Lock gating on widgets (`SharedSecurityPreferences.effectiveAppLockEnabled` + `isDiscoverable = false` + widget deep-link routing into locked GlassOTP), checks device authentication availability to enable App Lock, and requires device-owner authentication before disabling App Lock.
 - Google Favicons disclosures across `SettingsView`, `AutoCategorizeSheet`, `README.md`, and `SECURITY.md`, inline modal error banners, folder-only `.glassotp` restore support, local-only `BrandPickerSheet` grid selection, and `"Unsupported"` status handling for legacy MD5 accounts.
 - Actionable `"Retry Deleting iCloud Copy"` control (reactive on `VaultViewModel.hasPendingICloudCleanup`) when turning off iCloud Keychain sync encounters a cloud cleanup error.
+- Content-addressed 3-slot `ThisDeviceOnly` replica quarantine (`local-replica-quarantine-v1.<hash>`), non-blocking TOTP copy under lock contention, order-independent legacy Keychain discovery and multi-group cleanup, and macOS sync/write error banners.
 
 ### Fixed
 - Fixed Face ID auto-lock & cancel loops by ignoring `isAuthenticating` `.inactive` transitions and pausing automatic re-prompts after cancel/error until backgrounding or tapping Unlock.

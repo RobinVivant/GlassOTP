@@ -57,6 +57,8 @@ final class MacVaultViewModel {
     private(set) var hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
     private(set) var hasLoadError = false
     var syncError: String?
+    private(set) var writeError: String?
+    var bannerError: String? { syncError ?? writeError }
     var alertMessage: String?
 
     var quickPickerHotKey: HotKeyCombo? {
@@ -328,6 +330,7 @@ final class MacVaultViewModel {
         storeGeneration &+= 1
         do {
             let migrated = try store.setICloudSyncEnabled(enabled, removeOppositeBucket: removeFromICloud)
+            writeError = nil
             iCloudSyncEnabled = store.isICloudSyncEnabled()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             if let migrated {
@@ -359,6 +362,7 @@ final class MacVaultViewModel {
             let outcome = try store.retryPendingICloudCleanup()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             if outcome != .nothingPending {
+                writeError = nil
                 reloadFromStore()
             }
             switch outcome {
@@ -395,10 +399,11 @@ final class MacVaultViewModel {
         )
         do {
             let merged = try store.saveMergedSnapshot(snapshot)
+            writeError = nil
             applyLoadedSnapshot(merged)
             return true
         } catch {
-            syncError = error.localizedDescription
+            writeError = error.localizedDescription
             alertMessage = error.localizedDescription
             return false
         }
@@ -455,6 +460,9 @@ final class MacVaultViewModel {
             wasSupersededByStoreChange = (storeGeneration != expectedGeneration)
             if !wasSupersededByStoreChange {
                 if let updatedSnapshot = outcome.snapshot {
+                    if outcome.didMutate {
+                        writeError = nil
+                    }
                     applyLoadedSnapshot(updatedSnapshot, nonBlockingNotice: !outcome.didMutate)
                 } else {
                     guard copyRequestID == capturedCopyRequestID else {
@@ -464,13 +472,14 @@ final class MacVaultViewModel {
                     return fail("That account is no longer in your vault.")
                 }
             } else if outcome.didMutate {
+                writeError = nil
                 reloadFromStore()
             }
         } catch {
             guard copyRequestID == capturedCopyRequestID else {
                 return false
             }
-            syncError = error.localizedDescription
+            writeError = error.localizedDescription
             return fail(error.localizedDescription)
         }
 

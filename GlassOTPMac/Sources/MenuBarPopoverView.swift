@@ -195,7 +195,7 @@ struct MenuBarPopoverView: View {
                 }
             }
 
-            if !vault.accounts.isEmpty, let syncError = vault.syncError {
+            if !vault.accounts.isEmpty, let syncError = vault.bannerError {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.caption2)
@@ -206,7 +206,7 @@ struct MenuBarPopoverView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
                     Button("Refresh") {
-                        vault.reloadFromStore()
+                        Task { await vault.reloadFromStoreAsync() }
                     }
                     .font(.caption2.weight(.semibold))
                     .buttonStyle(.borderless)
@@ -343,7 +343,7 @@ struct MenuBarPopoverView: View {
             HStack(spacing: 8) {
                 if vault.iCloudSyncEnabled {
                     Button("Refresh Sync") {
-                        vault.reloadFromStore()
+                        Task { await vault.reloadFromStoreAsync() }
                     }
                     .buttonStyle(.borderedProminent)
                 } else {
@@ -359,7 +359,7 @@ struct MenuBarPopoverView: View {
                 .buttonStyle(.bordered)
             }
 
-            if let syncError = vault.syncError {
+            if let syncError = vault.bannerError {
                 Text(syncError)
                     .font(.caption2)
                     .foregroundStyle(.orange)
@@ -395,7 +395,7 @@ struct MenuBarPopoverView: View {
     private var settingsContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if let syncError = vault.syncError {
+                if let syncError = vault.bannerError {
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.caption2)
@@ -406,7 +406,7 @@ struct MenuBarPopoverView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 4)
                         Button("Refresh") {
-                            vault.reloadFromStore()
+                            Task { await vault.reloadFromStoreAsync() }
                         }
                         .font(.caption2.weight(.semibold))
                         .buttonStyle(.borderless)

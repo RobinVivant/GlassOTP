@@ -14,8 +14,13 @@ private final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendabl
     var accessGroup: String? = "TEAMID.com.robinvivant.glassotp.shared"
     var items: [EntryKey: Data] = [:]
     var readOverrides: [EntryKey: OSStatus] = [:]
+    var addOverrides: [EntryKey: OSStatus] = [:]
     var upsertOverrides: [EntryKey: OSStatus] = [:]
     var deleteOverrides: [EntryKey: OSStatus] = [:]
+    var beforeRead: ((EntryKey) -> Void)?
+    var beforeReadAll: ((_ account: String, _ synchronizable: Bool) -> Void)?
+    var beforeAdd: ((EntryKey) -> Void)?
+    var beforeUpsert: ((EntryKey) -> Void)?
     var omitActualAccessGroupOnUnscopedRead = false
     var reverseUnscopedOrder = false
 
@@ -28,7 +33,9 @@ private final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendabl
     }
 
     func read(account: String, synchronizable: Bool, accessGroup: String?) -> (status: OSStatus, data: Data?, actualAccessGroup: String?) {
-        lock.withLock {
+        let hook = lock.withLock { beforeRead }
+        hook?(key(account: account, synchronizable: synchronizable, accessGroup: accessGroup))
+        return lock.withLock {
             if let accessGroup {
                 let k = key(account: account, synchronizable: synchronizable, accessGroup: accessGroup)
                 if let status = readOverrides[k] {
@@ -58,15 +65,21 @@ private final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendabl
         }
     }
 
-    func readAll(account: String, synchronizable: Bool) -> (status: OSStatus, items: [(data: Data, actualAccessGroup: String?)]) {
-        lock.withLock { () -> (status: OSStatus, items: [(data: Data, actualAccessGroup: String?)]) in
+    func readAll(account: String, synchronizable: Bool, excludingAccessGroup: String?) -> (status: OSStatus, items: [(data: Data, actualAccessGroup: String?)]) {
+        let hook = lock.withLock { beforeReadAll }
+        hook?(account, synchronizable)
+        return lock.withLock { () -> (status: OSStatus, items: [(data: Data, actualAccessGroup: String?)]) in
             let empty: [(data: Data, actualAccessGroup: String?)] = []
             let unscopedKey = key(account: account, synchronizable: synchronizable, accessGroup: nil)
             if let status = readOverrides[unscopedKey], status != errSecSuccess {
                 return (status, empty)
             }
             let matches = items.keys
-                .filter { $0.account == account && $0.synchronizable == synchronizable }
+                .filter {
+                    $0.account == account
+                        && $0.synchronizable == synchronizable
+                        && (excludingAccessGroup == nil || $0.accessGroup != excludingAccessGroup)
+                }
                 .sorted { reverseUnscopedOrder ? ($0.accessGroup > $1.accessGroup) : ($0.accessGroup < $1.accessGroup) }
             var results: [(data: Data, actualAccessGroup: String?)] = []
             for match in matches {
@@ -88,9 +101,27 @@ private final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendabl
         }
     }
 
+    func add(data: Data, account: String, synchronizable: Bool, accessGroup: String?, accessibility: CFString) -> OSStatus {
+        let k = key(account: account, synchronizable: synchronizable, accessGroup: accessGroup)
+        let hook = lock.withLock { beforeAdd }
+        hook?(k)
+        return lock.withLock {
+            if let status = addOverrides[k] ?? upsertOverrides[k] {
+                return status
+            }
+            if items[k] != nil {
+                return errSecDuplicateItem
+            }
+            items[k] = data
+            return errSecSuccess
+        }
+    }
+
     func upsert(data: Data, account: String, synchronizable: Bool, accessGroup: String?, accessibility: CFString) -> OSStatus {
-        lock.withLock {
-            let k = key(account: account, synchronizable: synchronizable, accessGroup: accessGroup)
+        let k = key(account: account, synchronizable: synchronizable, accessGroup: accessGroup)
+        let hook = lock.withLock { beforeUpsert }
+        hook?(k)
+        return lock.withLock {
             if let status = upsertOverrides[k] {
                 return status
             }
@@ -1430,9 +1461,32 @@ struct KeychainVaultStoreTests {
             _ = try store.setICloudSyncEnabled(true, removeOppositeBucket: true)
             let accountsList2 = defaults.stringArray(forKey: GlassOTPConstants.quarantinedReplicaAccountsKey) ?? []
             #expect(accountsList2.count == 2)
+            let slot2Account = accountsList2[1]
             #expect(backend.items[slot1Key] == badReplica1)
-            let slot2Key = backend.key(account: accountsList2[1], synchronizable: false, accessGroup: group)
+            let slot2Key = backend.key(account: slot2Account, synchronizable: false, accessGroup: group)
             #expect(backend.items[slot2Key] == badReplica2)
+
+            // Fourth and fifth distinct corrupt replicas enforce the 3-slot quarantine cap and evict the oldest slot
+            let badReplica3 = Data("corrupt-replica-bytes-three".utf8)
+            backend.items[replicaKey] = badReplica3
+            _ = try store.setICloudSyncEnabled(false, removeOppositeBucket: removeOpposite)
+            _ = try store.setICloudSyncEnabled(true, removeOppositeBucket: true)
+            let accountsList3 = defaults.stringArray(forKey: GlassOTPConstants.quarantinedReplicaAccountsKey) ?? []
+            #expect(accountsList3.count == 3)
+            let slot3Account = accountsList3[2]
+
+            let badReplica4 = Data("corrupt-replica-bytes-four".utf8)
+            backend.items[replicaKey] = badReplica4
+            _ = try store.setICloudSyncEnabled(false, removeOppositeBucket: removeOpposite)
+            _ = try store.setICloudSyncEnabled(true, removeOppositeBucket: true)
+            let accountsList4 = defaults.stringArray(forKey: GlassOTPConstants.quarantinedReplicaAccountsKey) ?? []
+            #expect(accountsList4.count == 3)
+            let slot4Account = accountsList4[2]
+            #expect(accountsList4 == [slot2Account, slot3Account, slot4Account])
+            #expect(backend.items[slot1Key] == nil)
+            #expect(backend.items[slot2Key] == badReplica2)
+            #expect(backend.items[backend.key(account: slot3Account, synchronizable: false, accessGroup: group)] == badReplica3)
+            #expect(backend.items[backend.key(account: slot4Account, synchronizable: false, accessGroup: group)] == badReplica4)
 
             let mutated = try store.mutateSnapshot { $0.folders.append(OTPFolder(name: "Recovered")) }
             #expect(mutated.folders.map(\.name) == ["Recovered"])
@@ -1965,5 +2019,406 @@ struct KeychainVaultStoreTests {
         close(fd)
         lockReleased = true
         finished.wait()
+    }
+
+    @Test("Concurrent shared-vault arrival before readAll or add merges without overwriting the shared vault")
+    func concurrentSharedVaultArrivalDuringLegacyMigrationMergesWithoutOverwriting() throws {
+        // Variant A: Shared vault arrives between initial scoped read miss and readAll enumeration
+        do {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (procDefaults, procSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                procDefaults.removePersistentDomain(forName: procSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let legacyGroup = "TEAMID.com.robinvivant.glassotp"
+            let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+            let legacyAcc = OTPAccount(issuer: "LegacyBeforeReadAll", label: "l", secret: Data("111".utf8))
+            let sharedAcc = OTPAccount(issuer: "SharedArrival", label: "s", secret: Data("222".utf8))
+            let legacyKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacyGroup)
+            let sharedKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+            backend.items[legacyKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [legacyAcc]))
+            let sharedData = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [sharedAcc]))
+
+            backend.beforeReadAll = { account, synchronizable in
+                guard account == GlassOTPConstants.keychainAccount, synchronizable else { return }
+                if backend.items[sharedKey] == nil {
+                    backend.items[sharedKey] = sharedData
+                }
+            }
+
+            let loaded = try store.loadSnapshot()
+            #expect(Set(loaded?.accounts.map(\.issuer) ?? []) == ["LegacyBeforeReadAll", "SharedArrival"])
+            #expect(backend.items[legacyKey] == nil)
+            let persistedShared = try VaultSnapshotCoder.decode(from: #require(backend.items[sharedKey]))
+            #expect(Set(persistedShared.accounts.map(\.issuer)) == ["LegacyBeforeReadAll", "SharedArrival"])
+        }
+
+        // Variant B: Shared vault arrives after readAll and causes add(...) to hit errSecDuplicateItem
+        do {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (procDefaults, procSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                procDefaults.removePersistentDomain(forName: procSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let legacyGroup = "TEAMID.com.robinvivant.glassotp"
+            let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+            let legacyAcc = OTPAccount(issuer: "LegacyBeforeAdd", label: "l", secret: Data("333".utf8))
+            let sharedAcc = OTPAccount(issuer: "RaceSharedArrival", label: "s", secret: Data("444".utf8))
+            let legacyKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacyGroup)
+            let sharedKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+            backend.items[legacyKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [legacyAcc]))
+            let sharedData = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [sharedAcc]))
+
+            backend.beforeAdd = { key in
+                guard key == sharedKey, backend.items[sharedKey] == nil else { return }
+                backend.items[sharedKey] = sharedData
+            }
+
+            let loaded = try store.loadSnapshot()
+            #expect(Set(loaded?.accounts.map(\.issuer) ?? []) == ["LegacyBeforeAdd", "RaceSharedArrival"])
+            #expect(backend.items[legacyKey] == nil)
+            let persistedShared = try VaultSnapshotCoder.decode(from: #require(backend.items[sharedKey]))
+            #expect(Set(persistedShared.accounts.map(\.issuer)) == ["LegacyBeforeAdd", "RaceSharedArrival"])
+        }
+    }
+
+    @Test("Prior empty legacy scan still allows Keep Copy and Delete Copy to discover late-arriving legacy cloud vaults")
+    func priorEmptyScanStillAllowsDisableSyncToDiscoverLateArrivingLegacyCloud() throws {
+        for removeOpposite in [false, true] {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (procDefaults, procSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                procDefaults.removePersistentDomain(forName: procSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let legacyGroup = "TEAMID.com.robinvivant.glassotp"
+            let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+            // Initial empty scan marks syncCheckedKey = true
+            #expect(try store.loadSnapshot() == nil)
+            let syncCheckedKey = "\(GlassOTPConstants.legacyMigrationCheckedKey).\(group).sync"
+            #expect(procDefaults.bool(forKey: syncCheckedKey) == true)
+
+            // Late-arriving legacy cloud item appears afterward
+            let legacyAcc = OTPAccount(issuer: "LateLegacy", label: "l", secret: Data("555".utf8))
+            let legacySyncKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacyGroup)
+            let scopedSyncKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+            let localKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: false, accessGroup: group)
+            let legacyData = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [legacyAcc]))
+            backend.items[legacySyncKey] = legacyData
+
+            let result = try store.setICloudSyncEnabled(false, removeOppositeBucket: removeOpposite)
+            #expect(result?.accounts.map(\.issuer) == ["LateLegacy"])
+            let savedLocal = try VaultSnapshotCoder.decode(from: #require(backend.items[localKey]))
+            #expect(savedLocal.accounts.map(\.issuer) == ["LateLegacy"])
+
+            if removeOpposite {
+                #expect(backend.items[legacySyncKey] == nil)
+                let retired = try VaultSnapshotCoder.decode(from: #require(backend.items[scopedSyncKey]))
+                #expect(retired.accounts.isEmpty)
+                #expect(retired.cloudRetiredAtMillis != nil)
+                #expect(defaults.bool(forKey: GlassOTPConstants.pendingICloudDeletePreferenceKey) == false)
+            } else {
+                #expect(backend.items[legacySyncKey] == legacyData)
+            }
+        }
+    }
+
+    @Test("Multi-group legacy cloud cleanup merges and deletes every legacy group including across mid-cleanup retry")
+    func multiGroupLegacyCloudCleanupMergesAndDeletesAllGroupsEvenAcrossRetry() throws {
+        // Case 1: Two legacy groups cleaned up in a single Delete iCloud Copy call
+        do {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (procDefaults, procSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                procDefaults.removePersistentDomain(forName: procSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let legacyA = "TEAMID.com.robinvivant.glassotp"
+            let legacyB = "TEAMID.com.robinvivant.glassotp.legacyB"
+            let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+            let accA = OTPAccount(issuer: "LegacyA", label: "a", secret: Data("111".utf8))
+            let accB = OTPAccount(issuer: "LegacyB", label: "b", secret: Data("222".utf8))
+            let keyA = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacyA)
+            let keyB = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacyB)
+            let localKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: false, accessGroup: group)
+            backend.items[keyA] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [accA]))
+            backend.items[keyB] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [accB]))
+
+            let localResult = try store.setICloudSyncEnabled(false, removeOppositeBucket: true)
+            #expect(Set(localResult?.accounts.map(\.issuer) ?? []) == ["LegacyA", "LegacyB"])
+            #expect(backend.items[keyA] == nil)
+            #expect(backend.items[keyB] == nil)
+            #expect(defaults.bool(forKey: GlassOTPConstants.pendingICloudDeletePreferenceKey) == false)
+            let savedLocal = try VaultSnapshotCoder.decode(from: #require(backend.items[localKey]))
+            #expect(Set(savedLocal.accounts.map(\.issuer)) == ["LegacyA", "LegacyB"])
+        }
+
+        // Case 2: Three legacy groups with transient delete error on group 2 completes all 3 on retry
+        do {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (procDefaults, procSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                procDefaults.removePersistentDomain(forName: procSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let legacy1 = "TEAMID.com.robinvivant.glassotp.1"
+            let legacy2 = "TEAMID.com.robinvivant.glassotp.2"
+            let legacy3 = "TEAMID.com.robinvivant.glassotp.3"
+            let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+            let acc1 = OTPAccount(issuer: "G1", label: "1", secret: Data("111".utf8))
+            let acc2 = OTPAccount(issuer: "G2", label: "2", secret: Data("222".utf8))
+            let acc3 = OTPAccount(issuer: "G3", label: "3", secret: Data("333".utf8))
+            let key1 = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacy1)
+            let key2 = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacy2)
+            let key3 = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacy3)
+            let localKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: false, accessGroup: group)
+            backend.items[key1] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [acc1]))
+            backend.items[key2] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [acc2]))
+            backend.items[key3] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [acc3]))
+            backend.deleteOverrides[key2] = errSecIO
+
+            #expect(throws: KeychainVaultError.cloudCleanupFailed(errSecIO)) {
+                try store.setICloudSyncEnabled(false, removeOppositeBucket: true)
+            }
+            let syncCheckedKey = "\(GlassOTPConstants.legacyMigrationCheckedKey).\(group).sync"
+            #expect(procDefaults.bool(forKey: syncCheckedKey) == false)
+            #expect(defaults.bool(forKey: GlassOTPConstants.pendingICloudDeletePreferenceKey) == true)
+
+            backend.deleteOverrides.removeValue(forKey: key2)
+            let retryOutcome = try store.retryPendingICloudCleanup()
+            #expect(retryOutcome == .clearedCloudCopy)
+            #expect(backend.items[key1] == nil)
+            #expect(backend.items[key2] == nil)
+            #expect(backend.items[key3] == nil)
+            #expect(procDefaults.bool(forKey: syncCheckedKey) == true)
+            #expect(defaults.bool(forKey: GlassOTPConstants.pendingICloudDeletePreferenceKey) == false)
+            let savedLocal = try VaultSnapshotCoder.decode(from: #require(backend.items[localKey]))
+            #expect(Set(savedLocal.accounts.map(\.issuer)) == ["G1", "G2", "G3"])
+        }
+    }
+
+    @Test("Widget-first peer retirement with undecodable legacy sync item does not lock out the main app")
+    func widgetFirstRetirementWithCorruptLegacySyncDoesNotLockOutMainApp() throws {
+        let (defaults, suite) = makeIsolatedDefaults()
+        let (mainProcDefaults, mainProcSuite) = makeIsolatedDefaults()
+        let (widgetProcDefaults, widgetProcSuite) = makeIsolatedDefaults()
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            mainProcDefaults.removePersistentDomain(forName: mainProcSuite)
+            widgetProcDefaults.removePersistentDomain(forName: widgetProcSuite)
+        }
+
+        let backend = InMemoryKeychainBackend()
+        let group = backend.accessGroup!
+        let legacyGroup = "TEAMID.com.robinvivant.glassotp"
+        let lockURL = makeLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let mainStore = KeychainVaultStore(defaults: defaults, processDefaults: mainProcDefaults, backend: backend, isAppExtension: false, lockFileURL: lockURL)
+        let widgetStore = KeychainVaultStore(defaults: defaults, processDefaults: widgetProcDefaults, backend: backend, isAppExtension: true, lockFileURL: lockURL)
+
+        let activeAcc = OTPAccount(issuer: "ReplicaLocal", label: "a", secret: Data("111".utf8))
+        let replicaKey = backend.key(account: GlassOTPConstants.keychainLocalReplicaAccount, synchronizable: false, accessGroup: group)
+        let scopedSyncKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+        let legacySyncKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacyGroup)
+        let badLegacy = Data("future-legacy-cloud".utf8)
+
+        backend.items[replicaKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [activeAcc]))
+        backend.items[scopedSyncKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(cloudRetiredAtMillis: Date().roundedEpochMillis))
+        backend.items[legacySyncKey] = badLegacy
+
+        // Widget handles retirement first -> switches to local using replica, sets recovery flag
+        let widgetSnap = try widgetStore.loadSnapshot()
+        #expect(widgetSnap?.accounts.map(\.issuer) == ["ReplicaLocal"])
+        #expect(defaults.bool(forKey: GlassOTPConstants.pendingMainAppLegacyRetirementRecoveryKey) == true)
+
+        // Main app loads cleanly without lockout, clears recovery flag, and preserves undecodable legacy cloud item
+        let mainLoaded = try mainStore.loadSnapshot()
+        #expect(mainLoaded?.accounts.map(\.issuer) == ["ReplicaLocal"])
+        #expect(defaults.bool(forKey: GlassOTPConstants.pendingMainAppLegacyRetirementRecoveryKey) == false)
+        #expect(backend.items[legacySyncKey] == badLegacy)
+
+        let copied = try mainStore.resolveAccountForCopy(accountID: activeAcc.id)
+        #expect(copied.account?.id == activeAcc.id)
+        let edited = try mainStore.mutateSnapshot { $0.folders.append(OTPFolder(name: "Works")) }
+        #expect(edited.folders.map(\.name) == ["Works"])
+
+        // Attempting to re-enable sync still fails closed rather than silently overwriting corrupt legacy cloud data
+        #expect(throws: KeychainVaultError.unreadableCloudVault) {
+            _ = try mainStore.setICloudSyncEnabled(true)
+        }
+        #expect(backend.items[legacySyncKey] == badLegacy)
+    }
+
+    @Test("Editing a local fallback while sync is enabled quarantines an unreadable replica before overwriting it")
+    func localFallbackWriteWhileSyncEnabledQuarantinesUnreadableReplicaBeforeOverwrite() throws {
+        // Variant A: Successful edit archives the unreadable replica into quarantine first
+        do {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (procDefaults, procSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                procDefaults.removePersistentDomain(forName: procSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+            let localAcc = OTPAccount(issuer: "FallbackLocal", label: "l", secret: Data("111".utf8))
+            let localKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: false, accessGroup: group)
+            let replicaKey = backend.key(account: GlassOTPConstants.keychainLocalReplicaAccount, synchronizable: false, accessGroup: group)
+            let badReplica = Data("corrupt-fallback-replica".utf8)
+
+            backend.items[localKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [localAcc]))
+            backend.items[replicaKey] = badReplica
+
+            let updated = try store.mutateSnapshot { $0.folders.append(OTPFolder(name: "ArchivedFirst")) }
+            #expect(updated.folders.map(\.name) == ["ArchivedFirst"])
+            let slots = defaults.stringArray(forKey: GlassOTPConstants.quarantinedReplicaAccountsKey) ?? []
+            #expect(slots.count == 1)
+            let slotKey = backend.key(account: slots[0], synchronizable: false, accessGroup: group)
+            #expect(backend.items[slotKey] == badReplica)
+        }
+
+        // Variant B: If archiving to quarantine fails, the edit fails closed and preserves the unreadable replica
+        do {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (procDefaults, procSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                procDefaults.removePersistentDomain(forName: procSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+            let localAcc = OTPAccount(issuer: "FallbackGuarded", label: "g", secret: Data("222".utf8))
+            let localKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: false, accessGroup: group)
+            let replicaKey = backend.key(account: GlassOTPConstants.keychainLocalReplicaAccount, synchronizable: false, accessGroup: group)
+            let cloudKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+            let badReplica = Data("must-preserve-replica".utf8)
+
+            backend.items[localKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [localAcc]))
+            backend.items[replicaKey] = badReplica
+            backend.beforeUpsert = { key in
+                if key.account.hasPrefix(GlassOTPConstants.keychainLocalReplicaQuarantinePrefix) {
+                    backend.upsertOverrides[key] = errSecIO
+                }
+            }
+
+            #expect(throws: KeychainVaultError.unexpectedStatus(errSecIO)) {
+                _ = try store.mutateSnapshot { $0.folders.append(OTPFolder(name: "Blocked")) }
+            }
+            #expect(backend.items[replicaKey] == badReplica)
+            #expect(backend.items[cloudKey] == nil)
+        }
+    }
+
+    @Test("Initial disable-sync cleanup encountering corrupt cloud data maps to unreadableCloudVaultDuringCleanup")
+    func initialDisableSyncCleanupFailureMapsCorruptCloudToCleanupError() throws {
+        let (defaults, suite) = makeIsolatedDefaults()
+        let (procDefaults, procSuite) = makeIsolatedDefaults()
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            procDefaults.removePersistentDomain(forName: procSuite)
+        }
+
+        let backend = InMemoryKeychainBackend()
+        let group = backend.accessGroup!
+        let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+        let acc = OTPAccount(issuer: "SwitchRace", label: "r", secret: Data("111".utf8))
+        try store.saveSnapshot(OTPVaultSnapshot(accounts: [acc]))
+
+        let localKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: false, accessGroup: group)
+        let cloudKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+        backend.beforeUpsert = { key in
+            guard key == localKey else { return }
+            backend.items[cloudKey] = Data("concurrent-future-cloud".utf8)
+        }
+
+        #expect(throws: KeychainVaultError.unreadableCloudVaultDuringCleanup) {
+            try store.setICloudSyncEnabled(false, removeOppositeBucket: true)
+        }
+        #expect(store.isICloudSyncEnabled() == false)
+        #expect(defaults.bool(forKey: GlassOTPConstants.pendingICloudDeletePreferenceKey) == true)
+    }
+
+    @Test("Torn lock-free read missing requested accountID retries with lock and resolves account")
+    func tornLockFreeReadMissingAccountRetriesLockedLoadSnapshot() throws {
+        let (defaults, suite) = makeIsolatedDefaults()
+        let (procDefaults, procSuite) = makeIsolatedDefaults()
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            procDefaults.removePersistentDomain(forName: procSuite)
+        }
+
+        let backend = InMemoryKeychainBackend()
+        let group = backend.accessGroup!
+        let lockURL = makeLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: lockURL, lockTimeout: 2.0)
+
+        let accA = OTPAccount(issuer: "ExistingA", label: "a", secret: Data("111".utf8))
+        let accB = OTPAccount(issuer: "ReplicaOnlyB", label: "b", secret: Data("222".utf8))
+        let localKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: false, accessGroup: group)
+        let replicaKey = backend.key(account: GlassOTPConstants.keychainLocalReplicaAccount, synchronizable: false, accessGroup: group)
+        let cloudKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+
+        backend.items[localKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [accA]))
+        backend.items[replicaKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [accA, accB]))
+        backend.items[cloudKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(cloudRetiredAtMillis: Date().roundedEpochMillis))
+
+        let fd = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+        #expect(fd >= 0)
+        #expect(flock(fd, LOCK_EX | LOCK_NB) == 0)
+        var lockReleased = false
+        defer {
+            if !lockReleased {
+                _ = flock(fd, LOCK_UN)
+                close(fd)
+            }
+        }
+
+        let mergedLocalData = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [accA, accB]))
+        var simulatedMidTransition = false
+        backend.beforeRead = { key in
+            guard key == replicaKey, !simulatedMidTransition else { return }
+            simulatedMidTransition = true
+            // Simulate concurrent lock holder committing [accA, accB] to local, deleting replica, and releasing flock
+            backend.items[localKey] = mergedLocalData
+            backend.items.removeValue(forKey: replicaKey)
+            _ = flock(fd, LOCK_UN)
+            close(fd)
+            lockReleased = true
+        }
+
+        let resolved = try store.resolveAccountForCopy(accountID: accB.id)
+        #expect(resolved.account?.id == accB.id)
+        #expect(Set(resolved.snapshot?.accounts.map(\.id) ?? []) == [accA.id, accB.id])
     }
 }
