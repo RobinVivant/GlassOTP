@@ -71,11 +71,13 @@ public enum BrandLogoCache {
     private static let memoryStore = LogoMemoryStore()
 
     private static let cacheDirectory: URL = {
+        #if !os(macOS)
         if let appGroupURL = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: GlassOTPConstants.appGroupID
         ) {
             return appGroupURL.appendingPathComponent(folderName, isDirectory: true)
         }
+        #endif
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         return caches.appendingPathComponent("GlassOTP-\(folderName)", isDirectory: true)

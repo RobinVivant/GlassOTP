@@ -517,7 +517,7 @@ struct GlassOTPWidgetEntryView: View {
     ) -> some View {
         if entry.isAppLocked {
             content()
-                .accessibilityLabel("Open GlassOTP to view \(item.title)")
+                .accessibilityLabel("Open GlassOTP")
         } else if item.isMasked {
             Button(intent: RevealOTPWidgetIntent(accountID: item.id)) {
                 content()
@@ -581,10 +581,10 @@ struct GlassOTPWidgetEntryView: View {
                 Link(destination: URL(string: "glassotp://account/\(item.id.uuidString)")!) {
                     badge
                 }
-                .accessibilityLabel("Unlock GlassOTP for \(item.title)")
+                .accessibilityLabel("Unlock GlassOTP")
             } else {
                 badge
-                    .accessibilityLabel("Unlock GlassOTP for \(item.title)")
+                    .accessibilityLabel("Unlock GlassOTP")
             }
         } else if item.isMasked {
             Button(intent: RevealOTPWidgetIntent(accountID: item.id)) {

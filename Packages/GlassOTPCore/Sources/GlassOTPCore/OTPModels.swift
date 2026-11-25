@@ -392,7 +392,6 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
             if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
             return $0.id.uuidString < $1.id.uuidString
         }
-        let validFolderIDs = Set(mergedFolders.map(\.id))
 
         var accountTombstoneMap: [UUID: Date] = [:]
         for tombstone in accountTombstones + incoming.accountTombstones {
@@ -404,21 +403,10 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         }
 
         var accountMap: [UUID: OTPAccount] = [:]
-        func normalizedFolderAccount(_ account: OTPAccount) -> OTPAccount {
-            guard let folderID = account.folderID, !validFolderIDs.contains(folderID) else {
-                return account
-            }
-            var copy = account
-            copy.folderID = nil
-            return copy
-        }
-
-        for rawAccount in accounts {
-            let account = normalizedFolderAccount(rawAccount)
+        for account in accounts {
             accountMap[account.id] = account
         }
-        for rawAccount in incoming.accounts {
-            let account = normalizedFolderAccount(rawAccount)
+        for account in incoming.accounts {
             if let existing = accountMap[account.id] {
                 let incomingWinsMeta = account.updatedAt != existing.updatedAt
                     ? account.updatedAt > existing.updatedAt

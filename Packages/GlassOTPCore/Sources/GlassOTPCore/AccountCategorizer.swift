@@ -49,8 +49,12 @@ public enum AccountCategorizer {
             $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 .caseInsensitiveCompare("Accounts") == .orderedSame
         }
+        let validFolderIDs = Set(folders.map(\.id))
         let uncategorizedCount = accounts.reduce(into: 0) { count, account in
-            if account.folderID == nil { count += 1 }
+            if let folderID = account.folderID, validFolderIDs.contains(folderID) {
+                return
+            }
+            count += 1
         }
         let onlyDefaultFolder = folders.count == 1 && defaultAccountsFolder != nil
         return uncategorizedCount >= 2 || (onlyDefaultFolder && accounts.count >= 2)

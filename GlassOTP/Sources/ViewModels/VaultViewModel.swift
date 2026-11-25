@@ -77,6 +77,8 @@ final class VaultViewModel {
     @ObservationIgnored private var accountTombstones: [OTPTombstone] = []
     @ObservationIgnored private var folderTombstones: [OTPTombstone] = []
     @ObservationIgnored private var hasCompletedInitialLoad = false
+    @ObservationIgnored private var lockEpoch: UInt64 = 0
+    @ObservationIgnored private var storeGeneration: UInt64 = 0
     private static let hideCodesKey = "glassotp.hideCodesInApp"
     private static let dismissBannerKey = "glassotp.dismissAutoCategorizeBanner"
 
@@ -138,6 +140,7 @@ final class VaultViewModel {
     }
 
     private func applySnapshotToMemory(_ snapshot: OTPVaultSnapshot) {
+        storeGeneration &+= 1
         iCloudSyncEnabled = store.isICloudSyncEnabled()
         let sortedFolders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
         let sortedAccounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
@@ -162,11 +165,10 @@ final class VaultViewModel {
         let prevSync = iCloudSyncEnabled
         defer { hasCompletedInitialLoad = true }
 
+        storeGeneration &+= 1
         do {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
-            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             if let snapshot = try store.loadSnapshot() {
-                iCloudSyncEnabled = store.isICloudSyncEnabled()
                 applySnapshotToMemory(snapshot)
             } else {
                 iCloudSyncEnabled = store.isICloudSyncEnabled()
@@ -176,6 +178,10 @@ final class VaultViewModel {
                 folderTombstones = []
                 selectedFolderID = nil
                 hasLoadError = false
+                hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            }
+            if hasCompletedInitialLoad && prevSync && !iCloudSyncEnabled {
+                alertMessage = "Another device turned off iCloud Keychain Sync and deleted the cloud copy. This device now stores your vault locally."
             }
             if hasCompletedInitialLoad
                 && (folders != prevFolders || accounts != prevAccounts || iCloudSyncEnabled != prevSync) {
@@ -189,6 +195,7 @@ final class VaultViewModel {
     }
 
     func updateICloudSync(enabled: Bool, removeFromICloud: Bool = true) {
+        storeGeneration &+= 1
         do {
             let migrated = try store.setICloudSyncEnabled(enabled, removeOppositeBucket: removeFromICloud)
             iCloudSyncEnabled = store.isICloudSyncEnabled()
@@ -215,10 +222,15 @@ final class VaultViewModel {
 
     func retryPendingICloudCleanup() {
         do {
-            let cleaned = try store.retryPendingICloudCleanup()
+            let outcome = try store.retryPendingICloudCleanup()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
-            if cleaned {
+            switch outcome {
+            case .nothingPending:
+                break
+            case .clearedCloudCopy:
                 alertMessage = "Deleted the leftover iCloud Keychain copy."
+            case .localCleanupOnlyPeerSuperseded:
+                alertMessage = "Finished local cleanup. Another device had already re-enabled iCloud Keychain Sync, so its cloud vault was kept."
             }
         } catch {
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
@@ -232,6 +244,7 @@ final class VaultViewModel {
             alertMessage = "Cannot save changes because the existing Keychain vault could not be loaded."
             return false
         }
+        storeGeneration &+= 1
         let snapshot = OTPVaultSnapshot(
             schemaVersion: 1,
             folders: folders,
@@ -268,41 +281,39 @@ final class VaultViewModel {
 
         let store = self.store
         let accountID = account.id
-        Task { @MainActor in
-            var resolvedAccount: OTPAccount?
-            do {
-                let outcome = try await Task.detached(priority: .userInitiated) { () -> (updated: OTPVaultSnapshot?, resolved: OTPAccount?) in
-                    var resolved: OTPAccount?
-                    let updated = try store.mutateSnapshotIfPresent { snapshot in
-                        guard let idx = snapshot.accounts.firstIndex(where: { $0.id == accountID }) else {
-                            return false
-                        }
-                        let current = snapshot.accounts[idx]
-                        resolved = current
-                        guard current.isSupportedAlgorithm, current.type == .hotp else {
-                            return false
-                        }
-                        snapshot.accounts[idx].counter &+= 1
-                        snapshot.accounts[idx].updatedAt = Date.monotonicTimestamp(after: current.updatedAt, now: date ?? Date())
-                        return true
-                    }
-                    return (updated, resolved)
-                }.value
+        let capturedLockEpoch = lockEpoch
+        storeGeneration &+= 1
+        let expectedGeneration = storeGeneration
 
-                resolvedAccount = outcome.resolved
-                if let updatedSnapshot = outcome.updated {
-                    applySnapshotToMemory(updatedSnapshot)
-                } else {
-                    reloadFromStore()
-                    alertMessage = "That account is no longer in your vault."
-                    return
-                }
+        Task { @MainActor in
+            let outcome: (snapshot: OTPVaultSnapshot?, account: OTPAccount?, didMutate: Bool)
+            do {
+                outcome = try await Task.detached(priority: .userInitiated) {
+                    try store.resolveAccountForCopy(accountID: accountID)
+                }.value
             } catch {
                 alertMessage = error.localizedDescription
                 return
             }
 
-            guard let effectiveAccount = resolvedAccount else {
+            if storeGeneration == expectedGeneration {
+                if let updatedSnapshot = outcome.snapshot {
+                    if outcome.didMutate || updatedSnapshot.accounts != accounts || updatedSnapshot.folders != folders {
+                        applySnapshotToMemory(updatedSnapshot)
+                    }
+                } else {
+                    reloadFromStore()
+                    alertMessage = "That account is no longer in your vault."
+                    return
+                }
+            } else {
+                reloadFromStore()
+            }
+
+            guard lockEpoch == capturedLockEpoch else {
+                return
+            }
+            guard let effectiveAccount = outcome.account else {
                 alertMessage = "That account is no longer in your vault."
                 return
             }
@@ -621,6 +632,7 @@ final class VaultViewModel {
     }
 
     func dismissSensitivePresentationsForLock() {
+        lockEpoch &+= 1
         revealedAccountIDs.removeAll()
         pendingForegroundCopyCode = nil
         toastDismissTask?.cancel()
@@ -635,10 +647,19 @@ final class VaultViewModel {
     }
 
     func makeBackupSnapshot() -> OTPVaultSnapshot {
-        OTPVaultSnapshot(
+        let validFolderIDs = Set(folders.map(\.id))
+        let sanitizedAccounts = accounts.map { account in
+            guard let folderID = account.folderID, !validFolderIDs.contains(folderID) else {
+                return account
+            }
+            var copy = account
+            copy.folderID = nil
+            return copy
+        }
+        return OTPVaultSnapshot(
             schemaVersion: 1,
             folders: folders,
-            accounts: accounts,
+            accounts: sanitizedAccounts,
             updatedAt: Date()
         )
     }
@@ -651,7 +672,8 @@ final class VaultViewModel {
 
     func handleIncomingURL(_ url: URL, isLocked: Bool = false) {
         if isLocked {
-            if let oldPending = pendingIncomingURL, oldPending != url {
+            if let oldPending = pendingIncomingURL,
+               oldPending.resolvingSymlinksInPath().standardizedFileURL != url.resolvingSymlinksInPath().standardizedFileURL {
                 cleanupInboxFileIfNeeded(oldPending)
             }
             pendingIncomingURL = url
@@ -706,14 +728,24 @@ final class VaultViewModel {
             guard let match = accounts.first(where: { $0.id == accountID }) else {
                 return
             }
-            selectedFolderID = match.folderID
+            selectedFolderID = match.folderID.flatMap { fid in
+                folders.contains(where: { $0.id == fid }) ? fid : nil
+            }
             copyCode(for: match, reloadWidgets: true)
         }
     }
 
     private func cleanupInboxFileIfNeeded(_ url: URL) {
         guard url.isFileURL,
-              url.resolvingSymlinksInPath().standardizedFileURL.path.contains("/Documents/Inbox/") else {
+              let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let inboxPath = docs.appendingPathComponent("Inbox", isDirectory: true)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        let targetPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        guard targetPath.hasPrefix(inboxPath + "/") else {
             return
         }
         try? FileManager.default.removeItem(at: url)

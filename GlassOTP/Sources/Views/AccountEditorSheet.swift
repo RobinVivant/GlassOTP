@@ -264,6 +264,11 @@ struct AccountEditorSheet: View {
                     .disabled(algorithm == .md5 || decodedSecret == nil || (issuer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 }
             }
+            .onAppear {
+                if let fid = folderID, !vault.folders.contains(where: { $0.id == fid }) {
+                    folderID = nil
+                }
+            }
         }
     }
 }

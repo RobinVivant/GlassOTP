@@ -818,8 +818,45 @@ struct OTPCoreTests {
         #expect(decoded.accounts[0].updatedAt.roundedEpochMillis > futureDate.roundedEpochMillis)
     }
 
-    @Test("Snapshot merge is commutative, associative, and idempotent across 500 randomized triples")
-    func snapshotMergeSemilatticeProperties500Triples() {
+    @Test("Equal-millisecond folder moves plus folder tombstone merge associatively and resolve uncategorized")
+    func equalTimestampFolderMovesPlusTombstoneAssociativity() {
+        let folderF = OTPFolder(id: UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!, name: "F", sortOrder: 0)
+        let folderG = OTPFolder(id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!, name: "G", sortOrder: 1)
+        let tSame = Date(timeIntervalSince1970: 1_795_600_050.000)
+        let accID = UUID()
+
+        let baseAcc = OTPAccount(
+            id: accID,
+            issuer: "GitHub",
+            label: "a",
+            secret: Data("123".utf8),
+            folderID: folderF.id,
+            createdAt: tSame,
+            updatedAt: tSame
+        )
+        let snapX = OTPVaultSnapshot(folders: [folderF, folderG], accounts: [baseAcc], updatedAt: tSame)
+
+        var movedG = baseAcc
+        movedG.folderID = folderG.id
+        let snapY = OTPVaultSnapshot(folders: [folderF, folderG], accounts: [movedG], updatedAt: tSame)
+
+        let snapZ = OTPVaultSnapshot(
+            folders: [folderG],
+            accounts: [],
+            updatedAt: tSame,
+            folderTombstones: [OTPTombstone(id: folderF.id, deletedAt: tSame)]
+        )
+
+        let left = snapX.merged(with: snapY).merged(with: snapZ)
+        let right = snapX.merged(with: snapY.merged(with: snapZ))
+        #expect(left == right)
+        #expect(left.folders.map(\.id) == [folderG.id])
+        #expect(left.accounts.first?.folderID == folderF.id)
+        #expect(AccountCategorizer.hasUncategorizedOrDefaultOnly(accounts: [left.accounts[0], baseAcc], folders: left.folders))
+    }
+
+    @Test("Snapshot merge is commutative, associative, and idempotent across 1000 dense-tie randomized triples")
+    func snapshotMergeSemilatticeProperties1000DenseTieTriples() {
         struct SplitMix64: RandomNumberGenerator {
             private var state: UInt64
             init(seed: UInt64) { self.state = seed }
@@ -837,10 +874,11 @@ struct OTPCoreTests {
         let baseMillis: Int64 = 1_795_600_000_000
         let secrets = [Data([1, 2, 3]), Data([4, 5, 6]), Data([7, 8, 9])]
         let algos: [OTPAlgorithm] = [.sha1, .sha256, .sha512]
-        var rng = SplitMix64(seed: 0x474C4F54505F5235)
+        var rng = SplitMix64(seed: 0x474C4F54505F5236)
 
         func makeRandomDate(_ rng: inout SplitMix64) -> Date {
-            let offsetMillis = Int64(rng.next() % 20) * 150
+            // Dense 4-bucket timestamp pool to exercise equal-millisecond ties heavily
+            let offsetMillis = Int64(rng.next() % 4) * 150
             return Date(timeIntervalSince1970: Double(baseMillis + offsetMillis) / 1000.0)
         }
 
@@ -880,8 +918,8 @@ struct OTPCoreTests {
                     accounts.append(
                         OTPAccount(
                             id: aid,
-                            issuer: "Issuer-\(rng.next() % 3)",
-                            label: "User-\(rng.next() % 3)",
+                            issuer: "Issuer-\(rng.next() % 2)",
+                            label: "User-\(rng.next() % 2)",
                             secret: secrets[Int(rng.next() % UInt64(secrets.count))],
                             type: type,
                             algorithm: algos[Int(rng.next() % UInt64(algos.count))],
@@ -890,11 +928,11 @@ struct OTPCoreTests {
                             counter: rng.next() % 20,
                             folderID: assignedFolder,
                             isPinned: rng.next() % 2 == 0,
-                            sortOrder: Int(rng.next() % 10),
+                            sortOrder: Int(rng.next() % 3),
                             createdAt: createdAt,
                             updatedAt: makeRandomDate(&rng),
                             counterResetAt: hasReset ? makeRandomDate(&rng) : nil,
-                            credentialGeneration: rng.next() % 4
+                            credentialGeneration: rng.next() % 3
                         )
                     )
                 } else if pick == 2 {
@@ -914,7 +952,7 @@ struct OTPCoreTests {
             )
         }
 
-        for _ in 0..<500 {
+        for _ in 0..<1000 {
             let a = makeRandomSnapshot(&rng)
             let b = makeRandomSnapshot(&rng)
             let c = makeRandomSnapshot(&rng)

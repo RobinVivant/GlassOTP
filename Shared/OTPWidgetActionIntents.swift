@@ -49,37 +49,22 @@ struct CopyOTPWidgetIntent: AppIntent {
             return .result()
         }
 
-        let now = Date()
-        var targetAccount: OTPAccount?
-
-        let updatedSnapshot = try KeychainVaultStore.shared.mutateSnapshotIfPresent { snapshot in
-            guard let idx = snapshot.accounts.firstIndex(where: { $0.id == id }) else {
-                return false
-            }
-            let current = snapshot.accounts[idx]
-            targetAccount = current
-            guard current.isSupportedAlgorithm, current.type == .hotp else {
-                return false
-            }
-            snapshot.accounts[idx].counter &+= 1
-            snapshot.accounts[idx].updatedAt = Date.monotonicTimestamp(after: current.updatedAt, now: now)
-            return true
-        }
-
-        guard updatedSnapshot != nil,
-              let accountToCopy = targetAccount,
+        let outcome = try KeychainVaultStore.shared.resolveAccountForCopy(accountID: id)
+        guard outcome.snapshot != nil,
+              let accountToCopy = outcome.account,
               accountToCopy.isSupportedAlgorithm else {
             return .result()
         }
 
-        let codeSnapshot = OTPGenerator.snapshot(for: accountToCopy, at: now, includeNextCode: false)
+        let generationDate = Date()
+        let codeSnapshot = OTPGenerator.snapshot(for: accountToCopy, at: generationDate, includeNextCode: false)
 
         await MainActor.run {
             OTPClipboardWriter.copyOTP(codeSnapshot.code)
             AudioServicesPlaySystemSound(1520)
         }
 
-        SharedWidgetStateStore.recordCopy(accountID: id, at: now)
+        SharedWidgetStateStore.recordCopy(accountID: id, at: generationDate)
         WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
