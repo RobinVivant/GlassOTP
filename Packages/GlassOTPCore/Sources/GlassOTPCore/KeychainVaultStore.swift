@@ -164,6 +164,9 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
             kSecAttrAccount as String: GlassOTPConstants.keychainAccount,
             kSecAttrSynchronizable as String: synchronizable ? kCFBooleanTrue! : kCFBooleanFalse!,
         ]
+        #if os(macOS)
+        query[kSecUseDataProtectionKeychain as String] = kCFBooleanTrue!
+        #endif
         if let accessGroup {
             query[kSecAttrAccessGroup as String] = accessGroup
         }

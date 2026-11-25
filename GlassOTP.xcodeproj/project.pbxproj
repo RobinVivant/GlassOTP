@@ -8,24 +8,35 @@
 
 /* Begin PBXBuildFile section */
 		00351B365E1744A66F71B2F3 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BCA40793082F5FF0338C65B /* DesignSystem.swift */; };
+		00A9069E6EE14A34C64BB595 /* MacAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6981C1522C15D5DA9E0CC5 /* MacAppIntents.swift */; };
 		02A054D4DE3F50DD6C31776D /* BrandLogoFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C7120C917145D21689E820 /* BrandLogoFetcher.swift */; };
 		28B42BF711499C5575132465 /* OTPCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C40D0314FC4881D1AC573F6E /* OTPCardView.swift */; };
 		32BB3F459AF7D1F6F9148BE7 /* OTPWidgetActionIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E857F4FA6F0949A8A0D404C /* OTPWidgetActionIntents.swift */; };
 		4EF961A6DFCE991A82080072 /* OTPClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87EC3A01DF1B5DA769A83B1 /* OTPClock.swift */; };
 		5A7910CEA36108A34B4C7711 /* OTPWidgetIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E162C1B68F1B0706930909D6 /* OTPWidgetIntents.swift */; };
+		6436BBAAA6EFE10DF3CAB047 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C9E1D86B3D84EFA7FA6E501F /* Assets.xcassets */; };
 		6A712E074B7DE9A273F64DDC /* VaultHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BA990EBAB0B5EBFF445AAC5 /* VaultHomeView.swift */; };
+		6BA4F3574B4A5B5BC8D1DCD3 /* MenuBarPopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96449B76B055FDAA95678A89 /* MenuBarPopoverView.swift */; };
+		6ECEEBFF6F15FE9ACB8844BF /* GlassOTPMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14B64E4071D73F51FD4EF639 /* GlassOTPMacApp.swift */; };
 		72027D67D8CBD6D3030FF5D8 /* FoldersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B832CCF85C60E594B0F9FD67 /* FoldersView.swift */; };
+		7A697C49CCB262112829AA1F /* GlobalHotKeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 876EB3C9B58EDEA0A122AF1A /* GlobalHotKeyManager.swift */; };
 		7AC48D86115DA5EB572B1344 /* GlassOTPWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2E48BB15F978C2031033C90 /* GlassOTPWidget.swift */; };
 		7DB141796309FBDD1BF4F7BE /* GlassOTPCore in Frameworks */ = {isa = PBXBuildFile; productRef = 44F9253C87A4A938F90C3A29 /* GlassOTPCore */; };
 		8388B499BD83D98EDBEEB685 /* GlassOTPWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C2E009883A7973278D529460 /* GlassOTPWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		84A2567558AB6B89521DC5B2 /* BrandPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A892272790C2A4BF3CE776AF /* BrandPickerSheet.swift */; };
 		85E6EC2E914A07E1F33A46EF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 64F57F1FE83BCA82AB97DE76 /* Assets.xcassets */; };
+		8FB706C5065CA4013F805BB4 /* MacVaultViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40B55A4C6294AF186B8C8DE /* MacVaultViewModel.swift */; };
+		92D729218AFA5B939977A1D9 /* MacBrandBadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD2264B3314B952799066B27 /* MacBrandBadgeView.swift */; };
 		9F5DCB7424BE57FB2A515F72 /* GlassOTPCore in Frameworks */ = {isa = PBXBuildFile; productRef = 133EA85F372A6E078773D010 /* GlassOTPCore */; };
 		A04881A92B70B2878BA2B69B /* BiometricLockOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CF65E83347CE7090B421C2D /* BiometricLockOverlay.swift */; };
 		A4F517900253B49E5E575A04 /* BiometricLockManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A2FBF4498DD3D22125408AC /* BiometricLockManager.swift */; };
 		A546BC2E54BED5D2828845B8 /* OTPAuthImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 283B9C8C4CDC67212DD2BF7B /* OTPAuthImportSheet.swift */; };
 		A59511778699BD165C08A736 /* AutoCategorizeSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F425EC8855D595BBC6353076 /* AutoCategorizeSheet.swift */; };
 		BD4729DDAFC4CF9971CAF2A4 /* AccountQRDetailSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 149761E09AFDC6C4F600434F /* AccountQRDetailSheet.swift */; };
+		C36859774BF3B6F3AD4A8213 /* HotKeyModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13934DF4E8D58C76A3E55A76 /* HotKeyModels.swift */; };
+		C9C7BEDF8BCDB967CEA0E34F /* QuickAccessPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD1C5D07506479E1E13949CC /* QuickAccessPanelController.swift */; };
+		CA45DC0EBC06D1BF93982093 /* CopyHUDController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D19E2801402641DC012D0A /* CopyHUDController.swift */; };
+		D57C58B7510578F83BC32DAA /* GlassOTPCore in Frameworks */ = {isa = PBXBuildFile; productRef = 99C84E25367CBCEFA7643906 /* GlassOTPCore */; };
 		E01279E81EE0B05DADCBA3D2 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17889AC70F5DF240C4A9326F /* RootTabView.swift */; };
 		E6A616FC81E37B1F6752EC0A /* OTPWidgetActionIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E857F4FA6F0949A8A0D404C /* OTPWidgetActionIntents.swift */; };
 		E9E0C8448E8B78BD3CA45FA2 /* AccountEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DDC569CABAA0C72912CE28E /* AccountEditorSheet.swift */; };
@@ -33,6 +44,7 @@
 		F52E42B801126068939632FD /* QRScannerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2FDE297460DF25C78D9014 /* QRScannerSheet.swift */; };
 		F5F8C82244B91194F092CD61 /* GlassOTPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C4610A0257C0DC875DCE517 /* GlassOTPApp.swift */; };
 		F65A637DBFDC1DF33760E68F /* VaultViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 579D811F9A923199785B8048 /* VaultViewModel.swift */; };
+		F7E9F1480EA612C43B71588A /* MacOTPClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB3BEA17AF75E240C5EA1F51 /* MacOTPClock.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -61,10 +73,13 @@
 
 /* Begin PBXFileReference section */
 		0B2FDE297460DF25C78D9014 /* QRScannerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerSheet.swift; sourceTree = "<group>"; };
+		13934DF4E8D58C76A3E55A76 /* HotKeyModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotKeyModels.swift; sourceTree = "<group>"; };
 		149761E09AFDC6C4F600434F /* AccountQRDetailSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountQRDetailSheet.swift; sourceTree = "<group>"; };
+		14B64E4071D73F51FD4EF639 /* GlassOTPMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassOTPMacApp.swift; sourceTree = "<group>"; };
 		17889AC70F5DF240C4A9326F /* RootTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootTabView.swift; sourceTree = "<group>"; };
 		1A3F01B5BA17176B9DA52DF2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		1BA990EBAB0B5EBFF445AAC5 /* VaultHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultHomeView.swift; sourceTree = "<group>"; };
+		1C6981C1522C15D5DA9E0CC5 /* MacAppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppIntents.swift; sourceTree = "<group>"; };
 		283B9C8C4CDC67212DD2BF7B /* OTPAuthImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPAuthImportSheet.swift; sourceTree = "<group>"; };
 		3C4610A0257C0DC875DCE517 /* GlassOTPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassOTPApp.swift; sourceTree = "<group>"; };
 		3F72F99A0C7E23E0AAEA77B8 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -73,19 +88,28 @@
 		5CF65E83347CE7090B421C2D /* BiometricLockOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiometricLockOverlay.swift; sourceTree = "<group>"; };
 		64F57F1FE83BCA82AB97DE76 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7308BE5A7E0C29EC146D8E79 /* GlassOTPCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GlassOTPCore; path = Packages/GlassOTPCore; sourceTree = SOURCE_ROOT; };
+		78D7ABA8EF18E935219F5672 /* GlassOTPMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlassOTPMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7A2FBF4498DD3D22125408AC /* BiometricLockManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiometricLockManager.swift; sourceTree = "<group>"; };
+		876EB3C9B58EDEA0A122AF1A /* GlobalHotKeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotKeyManager.swift; sourceTree = "<group>"; };
 		8E857F4FA6F0949A8A0D404C /* OTPWidgetActionIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPWidgetActionIntents.swift; sourceTree = "<group>"; };
+		96449B76B055FDAA95678A89 /* MenuBarPopoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPopoverView.swift; sourceTree = "<group>"; };
 		9DDC569CABAA0C72912CE28E /* AccountEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountEditorSheet.swift; sourceTree = "<group>"; };
 		A2C7120C917145D21689E820 /* BrandLogoFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandLogoFetcher.swift; sourceTree = "<group>"; };
 		A892272790C2A4BF3CE776AF /* BrandPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandPickerSheet.swift; sourceTree = "<group>"; };
+		B7D19E2801402641DC012D0A /* CopyHUDController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyHUDController.swift; sourceTree = "<group>"; };
 		B832CCF85C60E594B0F9FD67 /* FoldersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoldersView.swift; sourceTree = "<group>"; };
+		BD1C5D07506479E1E13949CC /* QuickAccessPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickAccessPanelController.swift; sourceTree = "<group>"; };
 		C2E009883A7973278D529460 /* GlassOTPWidgetExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = GlassOTPWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C2E48BB15F978C2031033C90 /* GlassOTPWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassOTPWidget.swift; sourceTree = "<group>"; };
 		C3B8D812E5325E585CD1749A /* GlassOTPWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GlassOTPWidget.entitlements; sourceTree = "<group>"; };
 		C40D0314FC4881D1AC573F6E /* OTPCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPCardView.swift; sourceTree = "<group>"; };
+		C9E1D86B3D84EFA7FA6E501F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		CD2264B3314B952799066B27 /* MacBrandBadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBrandBadgeView.swift; sourceTree = "<group>"; };
 		E162C1B68F1B0706930909D6 /* OTPWidgetIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPWidgetIntents.swift; sourceTree = "<group>"; };
+		E40B55A4C6294AF186B8C8DE /* MacVaultViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacVaultViewModel.swift; sourceTree = "<group>"; };
 		E6A2C7A2A67CD84D3A28B2DF /* GlassOTP.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GlassOTP.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E87EC3A01DF1B5DA769A83B1 /* OTPClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPClock.swift; sourceTree = "<group>"; };
+		EB3BEA17AF75E240C5EA1F51 /* MacOTPClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOTPClock.swift; sourceTree = "<group>"; };
 		F425EC8855D595BBC6353076 /* AutoCategorizeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoCategorizeSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -95,6 +119,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				9F5DCB7424BE57FB2A515F72 /* GlassOTPCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		63725EB1F3736F424D7E4944 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D57C58B7510578F83BC32DAA /* GlassOTPCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -120,14 +152,25 @@
 			path = GlassOTP/Sources;
 			sourceTree = "<group>";
 		};
+		1BCA9DB49BF9DCEC3F7D649D /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				C9E1D86B3D84EFA7FA6E501F /* Assets.xcassets */,
+			);
+			name = Resources;
+			path = GlassOTPMac/Resources;
+			sourceTree = "<group>";
+		};
 		2E9443A3FFA6158624A89297 = {
 			isa = PBXGroup;
 			children = (
 				9DB1D8E1DDFBA71EBCC01CD6 /* GlassOTPWidget */,
 				625D21E1B8BCEEFBC8227A97 /* Packages */,
 				64DBE780B816A1D2D37A4E17 /* Resources */,
+				1BCA9DB49BF9DCEC3F7D649D /* Resources */,
 				66EC7F636B1F74FD98751CEF /* Shared */,
 				06367589194005080E1CBB9D /* Sources */,
+				A835D2923573772FC536E7DA /* Sources */,
 				56806BB8D01E88DF7615C2FF /* Products */,
 			);
 			sourceTree = "<group>";
@@ -136,6 +179,7 @@
 			isa = PBXGroup;
 			children = (
 				E6A2C7A2A67CD84D3A28B2DF /* GlassOTP.app */,
+				78D7ABA8EF18E935219F5672 /* GlassOTPMac.app */,
 				C2E009883A7973278D529460 /* GlassOTPWidgetExtension.appex */,
 			);
 			name = Products;
@@ -188,6 +232,24 @@
 			path = GlassOTPWidget;
 			sourceTree = "<group>";
 		};
+		A835D2923573772FC536E7DA /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				B7D19E2801402641DC012D0A /* CopyHUDController.swift */,
+				14B64E4071D73F51FD4EF639 /* GlassOTPMacApp.swift */,
+				876EB3C9B58EDEA0A122AF1A /* GlobalHotKeyManager.swift */,
+				13934DF4E8D58C76A3E55A76 /* HotKeyModels.swift */,
+				1C6981C1522C15D5DA9E0CC5 /* MacAppIntents.swift */,
+				CD2264B3314B952799066B27 /* MacBrandBadgeView.swift */,
+				EB3BEA17AF75E240C5EA1F51 /* MacOTPClock.swift */,
+				E40B55A4C6294AF186B8C8DE /* MacVaultViewModel.swift */,
+				96449B76B055FDAA95678A89 /* MenuBarPopoverView.swift */,
+				BD1C5D07506479E1E13949CC /* QuickAccessPanelController.swift */,
+			);
+			name = Sources;
+			path = GlassOTPMac/Sources;
+			sourceTree = "<group>";
+		};
 		C9CCDA0585B62029197E36DB /* Views */ = {
 			isa = PBXGroup;
 			children = (
@@ -211,6 +273,26 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		51521DF99340783F3FBEBC47 /* GlassOTPMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 629C07E1872E3D5E7494F83A /* Build configuration list for PBXNativeTarget "GlassOTPMac" */;
+			buildPhases = (
+				26E5124C56FFD735BF5F4C9C /* Sources */,
+				A102BDF7C2EAA4DDF8090EAD /* Resources */,
+				63725EB1F3736F424D7E4944 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = GlassOTPMac;
+			packageProductDependencies = (
+				99C84E25367CBCEFA7643906 /* GlassOTPCore */,
+			);
+			productName = GlassOTPMac;
+			productReference = 78D7ABA8EF18E935219F5672 /* GlassOTPMac.app */;
+			productType = "com.apple.product-type.application";
+		};
 		64FDCCE2DF0E2E4C1DA42444 /* GlassOTP */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = B4D6910B2A635F7AC6C1C1CA /* Build configuration list for PBXNativeTarget "GlassOTP" */;
@@ -261,6 +343,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
+					51521DF99340783F3FBEBC47 = {
+						DevelopmentTeam = 6G27LL5LJG;
+						ProvisioningStyle = Automatic;
+					};
 					64FDCCE2DF0E2E4C1DA42444 = {
 						DevelopmentTeam = 6G27LL5LJG;
 						ProvisioningStyle = Automatic;
@@ -290,11 +376,20 @@
 			targets = (
 				64FDCCE2DF0E2E4C1DA42444 /* GlassOTP */,
 				829CBCC7D93CA06849012DB0 /* GlassOTPWidgetExtension */,
+				51521DF99340783F3FBEBC47 /* GlassOTPMac */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		A102BDF7C2EAA4DDF8090EAD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6436BBAAA6EFE10DF3CAB047 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F511BA13A21C9FD69A5FF5B1 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -306,6 +401,23 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		26E5124C56FFD735BF5F4C9C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CA45DC0EBC06D1BF93982093 /* CopyHUDController.swift in Sources */,
+				6ECEEBFF6F15FE9ACB8844BF /* GlassOTPMacApp.swift in Sources */,
+				7A697C49CCB262112829AA1F /* GlobalHotKeyManager.swift in Sources */,
+				C36859774BF3B6F3AD4A8213 /* HotKeyModels.swift in Sources */,
+				00A9069E6EE14A34C64BB595 /* MacAppIntents.swift in Sources */,
+				92D729218AFA5B939977A1D9 /* MacBrandBadgeView.swift in Sources */,
+				F7E9F1480EA612C43B71588A /* MacOTPClock.swift in Sources */,
+				8FB706C5065CA4013F805BB4 /* MacVaultViewModel.swift in Sources */,
+				6BA4F3574B4A5B5BC8D1DCD3 /* MenuBarPopoverView.swift in Sources */,
+				C9C7BEDF8BCDB967CEA0E34F /* QuickAccessPanelController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		6400F439CC2F26E45AF6F731 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -403,14 +515,34 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		058D3033E154668ED657EBC8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = GlassOTPMac/GlassOTPMac.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = GlassOTPMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.robinvivant.glassotp.mac;
+				PRODUCT_NAME = GlassOTP;
+				SDKROOT = macosx;
 			};
 			name = Release;
 		};
@@ -431,6 +563,26 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
+		};
+		9CC378E06B0D875DCCA853F6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = GlassOTPMac/GlassOTPMac.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = GlassOTPMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.robinvivant.glassotp.mac;
+				PRODUCT_NAME = GlassOTP;
+				SDKROOT = macosx;
+			};
+			name = Debug;
 		};
 		B7882DC427EEE60E2B25CEDB /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -506,11 +658,11 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -561,6 +713,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		629C07E1872E3D5E7494F83A /* Build configuration list for PBXNativeTarget "GlassOTPMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9CC378E06B0D875DCCA853F6 /* Debug */,
+				058D3033E154668ED657EBC8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		B4D6910B2A635F7AC6C1C1CA /* Build configuration list for PBXNativeTarget "GlassOTP" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -603,6 +764,10 @@
 			productName = GlassOTPCore;
 		};
 		44F9253C87A4A938F90C3A29 /* GlassOTPCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GlassOTPCore;
+		};
+		99C84E25367CBCEFA7643906 /* GlassOTPCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = GlassOTPCore;
 		};

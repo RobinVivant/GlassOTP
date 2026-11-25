@@ -22,8 +22,9 @@ iOS isolates each app's private iCloud container by Team ID, so GlassOTP imports
 - **Interactive Widgets (`WidgetKit` + `AppIntents`)**: Small, Medium, Large, and Lock Screen (`accessoryRectangular`, `accessoryCircular`, `accessoryInline`) widgets with live countdowns, one-tap **Copy** button, per-widget account selection, and optional **Tap-to-Reveal (15s)** privacy mode.
 - **Security**: Universal Clipboard cross-device OTP copy (with optional local-only 60s mode), optional Face ID / Touch ID lock with auto-lock delay, app-switcher blur, and Keychain storage (`kSecAttrAccessibleAfterFirstUnlock` + optional `iCloud Keychain` sync).
 - **Encrypted Export**: Export portable `.glassotp` backups protected with RNCryptor v3.
+- **macOS Menu Bar Companion (`GlassOTPMac`)**: Syncs automatically with iPhone via iCloud Data Protection Keychain (`kSecUseDataProtectionKeychain`), adds 1-keystroke global shortcuts per OTP account, `⌃⌥Space` Spotlight-style search popover, optional auto-type, live menu bar countdown/code display, and macOS Shortcuts (`CopyMacOTPIntent`).
 
-## Building & Running on Your iPhone
+## Building & Running on Your iPhone & Mac
 
 1. Open `GlassOTP.xcodeproj` in Xcode 26+ (or Xcode 27.2).
 2. Select your **Apple Developer Team** under **Signing & Capabilities** on both **GlassOTP** and **GlassOTPWidgetExtension** targets so iOS provisions the shared App Group (`group.com.robinvivant.glassotp`) and shared Keychain Access Group (`$(AppIdentifierPrefix)com.robinvivant.glassotp.shared`).
