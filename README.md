@@ -2,7 +2,31 @@
 
 ![GlassOTP](assets/github-social-preview.png)
 
-GlassOTP is an open-source, native iOS 26+ and macOS 26+ two-factor authenticator (TOTP/HOTP) with Liquid Glass UI, interactive Home and Lock Screen widgets, 1-keystroke macOS menu bar shortcuts, iCloud Keychain sync, and on-device multi-provider backup import.
+GlassOTP is an open-source, native iOS 26+ and macOS 26+ two-factor authenticator (TOTP/HOTP) with Liquid Glass UI, 1-keystroke global macOS auto-type, interactive Home and Lock Screen widgets, iCloud Keychain sync, and on-device multi-provider backup import.
+
+## 1-Keystroke Auto-Type on macOS
+
+Bind your daily OTP accounts to direct global shortcuts (`⌃⌥1`–`⌃⌥9` or any custom shortcut) and enable **Auto-Type Digits on Direct Shortcut** (with macOS Accessibility permission) so 2FA prompts take a single keystroke from any browser, terminal, or VPN client:
+
+1. Press your account's global shortcut without leaving the focused login input.
+2. GlassOTP reserves/computes the live code, waits for modifier keys to release, verifies that the captured frontmost app (`postToPid`) is still active, and enters the OTP digits directly into the field while copying the code to a 60-second auto-clearing clipboard (`ConcealedType` / `TransientType`).
+3. A floating **`Typed & Copied`** confirmation HUD confirms delivery with zero window switching, phone unlocking, or `⌘V`.
+
+Press `⌃⌥Space` anytime to open the floating Spotlight-style vault popover and copy any account with `Return` or `⌘1`–`⌘9`.
+
+## Screenshots
+
+### macOS Menu Bar & 1-Keystroke Auto-Type
+
+| Quick Search & Direct Shortcut Badges (`⌃⌥1`–`⌃⌥3`) | 1-Keystroke Shortcuts, Auto-Type & `Typed & Copied` HUD |
+|---|---|
+| <img src="assets/screenshot-macos-popover.png" alt="GlassOTP macOS menu bar popover with direct shortcut badges" width="380"> | <img src="assets/screenshot-macos-autotype.png" alt="GlassOTP macOS 1-keystroke daily shortcuts, auto-type settings, and Typed and Copied HUD" width="380"> |
+
+### iOS Liquid Glass Vault (Dark & Light)
+
+| Dark Mode | Light Mode |
+|---|---|
+| <img src="assets/screenshot-ios-dark.png" alt="GlassOTP iOS vault in Dark Mode" width="280"> | <img src="assets/screenshot-ios-light.png" alt="GlassOTP iOS vault in Light Mode" width="280"> |
 
 ## Quickstart
 
@@ -85,9 +109,8 @@ All exports are parsed and decrypted on-device. Unencrypted exports skip passwor
 
 | Shortcut / Feature | Behavior |
 |---|---|
+| `Ctrl+Option+1`..`9` (`⌃⌥1`-`⌃⌥9`) or custom shortcut + Auto-Type | Copies a bound account's current OTP in one keystroke from any app, verifies the frontmost target app (`postToPid`), waits for modifier keys to release, and types the digits directly into the focused input field when **Auto-Type Digits on Direct Shortcut** and macOS Accessibility permission are enabled, showing a `Typed & Copied` confirmation HUD. |
 | `Ctrl+Option+Space` (`⌃⌥Space`) | Opens the floating quick-search panel from any app. Press `Return` to copy the top match or `Cmd+1` through `Cmd+9` (`⌘1`-`⌘9`) for rows 1-9. |
-| `Ctrl+Option+1`..`9` (`⌃⌥1`-`⌃⌥9`) or custom shortcut | Copies a bound account's current OTP in one keystroke from any app and displays a brief confirmation HUD. |
-| Auto-Type on Direct Shortcut (optional) | Types the OTP digits into the focused input field once modifier keys are released (requires macOS Accessibility permission). |
 | Live Menu Bar Code (optional) | Displays one pinned account's current OTP and countdown directly in the macOS menu bar. |
 
 `GlassOTP` and `GlassOTPMac` share the Keychain access group `$(AppIdentifierPrefix)com.robinvivant.glassotp.shared`, so accounts sync between iPhone and Mac when signed with the same Apple Developer Team and Apple Account (with iCloud Keychain enabled).
