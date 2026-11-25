@@ -316,50 +316,96 @@ struct GlassOTPWidgetEntryView: View {
     }
 
     private func accessoryRectangularView(item: OTPWidgetItem) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(item.title)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                Spacer()
-                if !item.isHOTP {
-                    Text(item.periodEnd, style: .timer)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
+        lockScreenActionButton(for: item) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(item.title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    if !item.isHOTP {
+                        Text(item.periodEnd, style: .timer)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                HStack(spacing: 6) {
+                    Text(item.isMasked ? "••• •••" : item.formattedCode)
+                        .font(.title3.weight(.bold))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .widgetAccentable()
+                    Spacer(minLength: 2)
+                    Image(systemName: lockScreenActionSymbol(for: item))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(item.wasCopied ? .primary : .secondary)
                 }
             }
-            Text(item.isMasked ? "••• •••" : item.formattedCode)
-                .font(.title3.weight(.bold))
-                .monospacedDigit()
-                .widgetAccentable()
         }
+        .widgetURL(URL(string: "glassotp://account/\(item.id.uuidString)"))
     }
 
     private func accessoryCircularView(item: OTPWidgetItem) -> some View {
-        ZStack {
-            AccessoryWidgetBackground()
-            if !item.isHOTP {
-                Gauge(value: 0.5, in: 0...1) {
-                    Text(item.title.prefix(2))
-                } currentValueLabel: {
+        lockScreenActionButton(for: item) {
+            ZStack {
+                AccessoryWidgetBackground()
+                if item.wasCopied {
+                    Image(systemName: "checkmark")
+                        .font(.title3.weight(.bold))
+                        .widgetAccentable()
+                } else if !item.isHOTP {
+                    Gauge(value: 0.5, in: 0...1) {
+                        Text(item.title.prefix(2))
+                    } currentValueLabel: {
+                        Text(item.isMasked ? "•••" : String(item.formattedCode.prefix(3)))
+                            .font(.caption.bold())
+                            .monospacedDigit()
+                    }
+                    .gaugeStyle(.accessoryCircularCapacity)
+                    .widgetAccentable()
+                } else {
                     Text(item.isMasked ? "•••" : String(item.formattedCode.prefix(3)))
                         .font(.caption.bold())
                         .monospacedDigit()
+                        .widgetAccentable()
                 }
-                .gaugeStyle(.accessoryCircularCapacity)
-                .widgetAccentable()
-            } else {
-                Text(item.isMasked ? "•••" : String(item.formattedCode.prefix(3)))
-                    .font(.caption.bold())
-                    .monospacedDigit()
-                    .widgetAccentable()
             }
         }
+        .widgetURL(URL(string: "glassotp://account/\(item.id.uuidString)"))
     }
 
     private func accessoryInlineView(item: OTPWidgetItem) -> some View {
         Text("\(item.title): \(item.isMasked ? "••• •••" : item.formattedCode)")
             .monospacedDigit()
+            .widgetURL(URL(string: "glassotp://account/\(item.id.uuidString)"))
+    }
+
+    @ViewBuilder
+    private func lockScreenActionButton<Content: View>(
+        for item: OTPWidgetItem,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        if item.isMasked {
+            Button(intent: RevealOTPWidgetIntent(accountID: item.id)) {
+                content()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Reveal \(item.title)")
+        } else {
+            Button(intent: CopyOTPWidgetIntent(accountID: item.id)) {
+                content()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Copy \(item.title)")
+        }
+    }
+
+    private func lockScreenActionSymbol(for item: OTPWidgetItem) -> String {
+        if item.isMasked {
+            return "eye.fill"
+        }
+        return item.wasCopied ? "checkmark.circle.fill" : "doc.on.doc"
     }
 
     @ViewBuilder

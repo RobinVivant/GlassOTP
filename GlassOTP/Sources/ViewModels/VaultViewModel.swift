@@ -3,7 +3,6 @@ import GlassOTPCore
 import Observation
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 import WidgetKit
 
 struct CopiedToast: Equatable, Identifiable {
@@ -64,6 +63,12 @@ final class VaultViewModel {
         }
     }
 
+    var universalClipboardEnabled: Bool {
+        didSet {
+            SharedClipboardPreferences.isUniversalClipboardEnabled = universalClipboardEnabled
+        }
+    }
+
     var revealedAccountIDs: Set<UUID> = []
 
     private let store: KeychainVaultStore
@@ -75,6 +80,7 @@ final class VaultViewModel {
         self.store = store
         self.iCloudSyncEnabled = store.isICloudSyncEnabled()
         self.hideCodesInApp = UserDefaults.standard.bool(forKey: Self.hideCodesKey)
+        self.universalClipboardEnabled = SharedClipboardPreferences.isUniversalClipboardEnabled
         self.dismissedAutoCategorizeBanner = UserDefaults.standard.bool(forKey: Self.dismissBannerKey)
         reloadFromStore()
     }
@@ -149,13 +155,7 @@ final class VaultViewModel {
 
     func copyCode(for account: OTPAccount, at date: Date = Date()) {
         let snapshot = OTPGenerator.snapshot(for: account, at: date)
-        UIPasteboard.general.setItems(
-            [[UTType.utf8PlainText.identifier: snapshot.code]],
-            options: [
-                .localOnly: true,
-                .expirationDate: Date().addingTimeInterval(60),
-            ]
-        )
+        OTPClipboardWriter.copyOTP(snapshot.code)
 
         let generator = UINotificationFeedbackGenerator()
         generator.notificationOccurred(.success)

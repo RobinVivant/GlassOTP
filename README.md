@@ -20,7 +20,7 @@ iOS isolates each app's private iCloud container by Team ID, so GlassOTP imports
 ## Features
 - **Native Liquid Glass UI (`iOS 26+`)**: Morphing `GlassEffectContainer` folder filters, `.glassEffect` capsules, `.buttonStyle(.glassProminent)` actions, and `.tabBarMinimizeBehavior(.onScrollDown)`.
 - **Interactive Widgets (`WidgetKit` + `AppIntents`)**: Small, Medium, Large, and Lock Screen (`accessoryRectangular`, `accessoryCircular`, `accessoryInline`) widgets with live countdowns, one-tap **Copy** button, per-widget account selection, and optional **Tap-to-Reveal (15s)** privacy mode.
-- **Security**: Local-only 60s expiring pasteboard copies, optional Face ID / Touch ID lock with auto-lock delay, app-switcher blur, and Keychain storage (`kSecAttrAccessibleAfterFirstUnlock` + optional `iCloud Keychain` sync).
+- **Security**: Universal Clipboard cross-device OTP copy (with optional local-only 60s mode), optional Face ID / Touch ID lock with auto-lock delay, app-switcher blur, and Keychain storage (`kSecAttrAccessibleAfterFirstUnlock` + optional `iCloud Keychain` sync).
 - **Encrypted Export**: Export portable `.glassotp` backups protected with RNCryptor v3.
 
 ## Building & Running on Your iPhone

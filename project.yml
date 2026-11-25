@@ -27,6 +27,7 @@ targets:
     sources:
       - path: GlassOTP/Sources
       - path: GlassOTP/Resources
+      - path: Shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.robinvivant.glassotp
@@ -47,6 +48,7 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: GlassOTPWidget
+      - path: Shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.robinvivant.glassotp.widget

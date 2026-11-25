@@ -87,7 +87,8 @@ struct SettingsView: View {
                     Text("Tokens are stored inside Apple's encrypted Keychain. When enabled, iCloud Keychain syncs your vault automatically across devices signed into your Apple Account.")
                 }
 
-                Section("Security & Privacy") {
+                Section {
+                    Toggle("Universal Clipboard (Copy Across Devices)", isOn: $bindableVault.universalClipboardEnabled)
                     Toggle("Require \(security.biometryDisplayName) Lock", isOn: $bindableSecurity.biometricLockEnabled)
 
                     if security.biometricLockEnabled {
@@ -100,6 +101,10 @@ struct SettingsView: View {
 
                     Toggle("Blur in App Switcher", isOn: $bindableSecurity.appSwitcherBlurEnabled)
                     Toggle("Mask Codes Until Tapped", isOn: $bindableVault.hideCodesInApp)
+                } header: {
+                    Text("Security & Privacy")
+                } footer: {
+                    Text("When Universal Clipboard is enabled, copied OTP codes sync to your nearby Mac and iPad via Handoff. Turn it off to restrict copied codes to this iPhone for 60 seconds.")
                 }
 
                 Section("Home & Lock Screen Widgets") {
@@ -184,7 +189,7 @@ struct SettingsView: View {
                         guideStep(
                             number: "3",
                             title: "Customize Account & Privacy Mode",
-                            body: "Long-press a GlassOTP widget > Edit Widget to pick a specific account or turn on Tap to Reveal so codes stay masked until tapped."
+                            body: "Long-press a GlassOTP widget > Edit Widget to pick a specific account or turn on Tap to Reveal so codes stay masked until tapped. Tapping Copy on Home Screen or Lock Screen widgets copies via Universal Clipboard when enabled."
                         )
                         guideStep(
                             number: "4",

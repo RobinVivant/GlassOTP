@@ -7,6 +7,25 @@ public enum GlassOTPConstants {
     public static let keychainAccount = "primary-vault-v1"
     public static let keychainAccessGroupSuffix = "com.robinvivant.glassotp.shared"
     public static let iCloudSyncPreferenceKey = "glassotp.icloud.sync.enabled"
+    public static let universalClipboardPreferenceKey = "glassotp.universalClipboard.enabled"
+}
+
+public enum SharedClipboardPreferences {
+    private static var defaults: UserDefaults {
+        UserDefaults(suiteName: GlassOTPConstants.appGroupID) ?? .standard
+    }
+
+    public static var isUniversalClipboardEnabled: Bool {
+        get {
+            if defaults.object(forKey: GlassOTPConstants.universalClipboardPreferenceKey) == nil {
+                return true
+            }
+            return defaults.bool(forKey: GlassOTPConstants.universalClipboardPreferenceKey)
+        }
+        set {
+            defaults.set(newValue, forKey: GlassOTPConstants.universalClipboardPreferenceKey)
+        }
+    }
 }
 
 public protocol VaultPersistence: Sendable {

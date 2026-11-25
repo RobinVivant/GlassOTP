@@ -258,4 +258,26 @@ struct BrandAndCategorizerTests {
         )
         #expect(derivedCode == full.code)
     }
+
+    @Test("SharedClipboardPreferences defaults Universal Clipboard to enabled and round-trips toggles")
+    func sharedClipboardPreferencesRoundTrip() {
+        let defaults = UserDefaults(suiteName: GlassOTPConstants.appGroupID) ?? .standard
+        let priorObject = defaults.object(forKey: GlassOTPConstants.universalClipboardPreferenceKey)
+        defer {
+            if let priorObject {
+                defaults.set(priorObject, forKey: GlassOTPConstants.universalClipboardPreferenceKey)
+            } else {
+                defaults.removeObject(forKey: GlassOTPConstants.universalClipboardPreferenceKey)
+            }
+        }
+
+        defaults.removeObject(forKey: GlassOTPConstants.universalClipboardPreferenceKey)
+        #expect(SharedClipboardPreferences.isUniversalClipboardEnabled == true)
+
+        SharedClipboardPreferences.isUniversalClipboardEnabled = false
+        #expect(SharedClipboardPreferences.isUniversalClipboardEnabled == false)
+
+        SharedClipboardPreferences.isUniversalClipboardEnabled = true
+        #expect(SharedClipboardPreferences.isUniversalClipboardEnabled == true)
+    }
 }
