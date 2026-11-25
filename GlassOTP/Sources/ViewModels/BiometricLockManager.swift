@@ -37,6 +37,7 @@ final class BiometricLockManager {
     }
 
     private var backgroundedAt: Date?
+    private var suppressAutoAuthUntilBackground = false
     private static let lockEnabledKey = "glassotp.biometric.lockEnabled"
     private static let blurEnabledKey = "glassotp.privacy.appSwitcherBlur"
     private static let autoLockDelayKey = "glassotp.biometric.autoLockDelay"
@@ -53,7 +54,12 @@ final class BiometricLockManager {
         self.biometricLockEnabled = lockEnabled
         self.appSwitcherBlurEnabled = defaults.bool(forKey: Self.blurEnabledKey)
         self.autoLockDelaySeconds = defaults.integer(forKey: Self.autoLockDelayKey)
+        let wasInitialized = SharedSecurityPreferences.isAppLockPreferenceInitialized
+        let previousSharedLock = SharedSecurityPreferences.isAppLockEnabled
         SharedSecurityPreferences.isAppLockEnabled = lockEnabled
+        if !wasInitialized || previousSharedLock != lockEnabled {
+            WidgetCenter.shared.reloadAllTimelines()
+        }
         if lockEnabled {
             isLocked = true
         }
@@ -109,17 +115,22 @@ final class BiometricLockManager {
         await authenticate()
     }
 
-    func authenticate() async {
+    func authenticate(userInitiated: Bool = false) async {
         guard biometricLockEnabled else {
             isLocked = false
             backgroundedAt = nil
+            suppressAutoAuthUntilBackground = false
             return
+        }
+        if userInitiated {
+            suppressAutoAuthUntilBackground = false
         }
         guard isLocked, !isAuthenticating else { return }
         let context = LAContext()
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
             isLocked = true
+            suppressAutoAuthUntilBackground = true
             authErrorMessage = error?.localizedDescription
                 ?? "Set a device passcode or enable \(biometryDisplayName) in iOS Settings to unlock."
             return
@@ -135,17 +146,34 @@ final class BiometricLockManager {
                 localizedReason: "Unlock your GlassOTP authenticator vault"
             )
             if success {
+                suppressAutoAuthUntilBackground = false
                 backgroundedAt = nil
                 authErrorMessage = nil
                 withAnimation(.easeOut(duration: 0.2)) {
                     isLocked = false
                 }
+            } else {
+                suppressAutoAuthUntilBackground = true
             }
         } catch let laError as LAError where laError.code == .userCancel || laError.code == .systemCancel {
+            suppressAutoAuthUntilBackground = true
             authErrorMessage = "Authentication canceled."
         } catch {
+            suppressAutoAuthUntilBackground = true
             authErrorMessage = error.localizedDescription
         }
+    }
+
+    func verifyDeviceOwner(reason: String) async -> Bool {
+        guard !isAuthenticating else { return false }
+        let context = LAContext()
+        var error: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
+            return false
+        }
+        isAuthenticating = true
+        defer { isAuthenticating = false }
+        return (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) == true
     }
 
     func handleScenePhaseChange(_ phase: ScenePhase) {
@@ -158,6 +186,7 @@ final class BiometricLockManager {
             }
         case .background:
             guard biometricLockEnabled else { return }
+            suppressAutoAuthUntilBackground = false
             backgroundedAt = Date()
             if autoLockDelaySeconds == 0 {
                 isLocked = true
@@ -166,6 +195,7 @@ final class BiometricLockManager {
             guard biometricLockEnabled else {
                 isLocked = false
                 backgroundedAt = nil
+                suppressAutoAuthUntilBackground = false
                 return
             }
             if !isAuthenticating, let backgroundedAt {
@@ -175,7 +205,7 @@ final class BiometricLockManager {
                 }
                 self.backgroundedAt = nil
             }
-            if isLocked && !isAuthenticating {
+            if isLocked && !isAuthenticating && !suppressAutoAuthUntilBackground {
                 Task { await authenticate() }
             }
         @unknown default:

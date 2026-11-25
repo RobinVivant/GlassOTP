@@ -34,6 +34,8 @@ struct SettingsView: View {
     @State private var showingWidgetGuide = false
     @State private var showingICloudDisableConfirmation = false
     @State private var isExportingBackup = false
+    @State private var exportTask: Task<Void, Never>?
+    @State private var exportErrorMessage: String?
 
     private var iCloudSyncBinding: Binding<Bool> {
         Binding(
@@ -52,11 +54,20 @@ struct SettingsView: View {
         Binding(
             get: { security.biometricLockEnabled },
             set: { newValue in
-                if newValue && !security.canEvaluateDeviceAuthentication() {
-                    vault.alertMessage = "Set a device passcode or enable \(security.biometryDisplayName) in iOS Settings before enabling app lock."
-                    return
+                if newValue {
+                    if !security.canEvaluateDeviceAuthentication() {
+                        vault.alertMessage = "Set a device passcode or enable \(security.biometryDisplayName) in iOS Settings before enabling app lock."
+                        return
+                    }
+                    security.biometricLockEnabled = true
+                } else {
+                    Task {
+                        let verified = await security.verifyDeviceOwner(reason: "Authenticate to disable GlassOTP App Lock")
+                        if verified {
+                            security.biometricLockEnabled = false
+                        }
+                    }
                 }
-                security.biometricLockEnabled = newValue
             }
         )
     }
@@ -69,7 +80,7 @@ struct SettingsView: View {
             AmbientGlassBackground()
 
             Form {
-                Section("Logos & Categorization") {
+                Section {
                     Button {
                         vault.showingAutoCategorizeSheet = true
                     } label: {
@@ -88,6 +99,10 @@ struct SettingsView: View {
                         Label("Fetch Missing Web Logos", systemImage: "arrow.down.circle")
                     }
                     .disabled(vault.accounts.isEmpty)
+                } header: {
+                    Text("Logos & Categorization")
+                } footer: {
+                    Text("Fetching web logos sends the service domains (never account usernames or secrets) to Google Favicons (www.google.com/s2/favicons).")
                 }
 
                 Section("Migration & Backup") {
@@ -98,6 +113,10 @@ struct SettingsView: View {
                     }
 
                     Button {
+                        exportTask?.cancel()
+                        exportTask = nil
+                        exportDocument = nil
+                        exportErrorMessage = nil
                         exportPassword = ""
                         exportConfirmPassword = ""
                         showingExportPasswordPrompt = true
@@ -109,7 +128,7 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("iCloud Keychain Sync", isOn: iCloudSyncBinding)
-                    if SharedSecurityPreferences.hasPendingICloudCleanup && !vault.iCloudSyncEnabled {
+                    if vault.hasPendingICloudCleanup && !vault.iCloudSyncEnabled {
                         Button("Retry Deleting iCloud Copy", role: .destructive) {
                             vault.retryPendingICloudCleanup()
                         }
@@ -137,7 +156,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Security & Privacy")
                 } footer: {
-                    Text("When Universal Clipboard is enabled, copied OTP codes sync to your nearby Mac and iPad via Handoff (tapping a Home Screen or Lock Screen widget briefly opens GlassOTP so iOS broadcasts across devices). Turn it off for silent local-only 60s copies from widgets.")
+                    Text("When Universal Clipboard is enabled, copied OTP codes sync to your nearby Mac and iPad via Handoff. Turn it off for silent local-only 60s copies from widgets. When App Lock is enabled, widgets stay locked until you authenticate in GlassOTP.")
                 }
 
                 Section("Home & Lock Screen Widgets") {
@@ -170,9 +189,13 @@ struct SettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Deleting the iCloud copy removes it from all devices signed into your Apple Account. Or keep the existing iCloud vault and switch only this device to local storage.")
+            Text("Deleting the iCloud copy removes it from iCloud Keychain and switches synced devices to local storage. Or keep the existing iCloud vault and switch only this device to local storage.")
         }
         .sheet(isPresented: $showingExportPasswordPrompt, onDismiss: {
+            exportTask?.cancel()
+            exportTask = nil
+            isExportingBackup = false
+            exportErrorMessage = nil
             exportPassword = ""
             exportConfirmPassword = ""
             if exportDocument != nil {
@@ -181,6 +204,14 @@ struct SettingsView: View {
         }) {
             NavigationStack {
                 Form {
+                    if let exportErrorMessage {
+                        Section {
+                            Label(exportErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+                    }
+
                     Section {
                         SecureField("Backup Password (min 8 chars)", text: $exportPassword)
                         SecureField("Confirm Password", text: $exportConfirmPassword)
@@ -195,6 +226,8 @@ struct SettingsView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") {
+                            exportTask?.cancel()
+                            exportTask = nil
                             exportDocument = nil
                             showingExportPasswordPrompt = false
                         }
@@ -203,18 +236,28 @@ struct SettingsView: View {
                         Button {
                             let snapshot = vault.makeBackupSnapshot()
                             let pwd = exportPassword
+                            exportErrorMessage = nil
                             isExportingBackup = true
-                            Task {
+                            exportTask?.cancel()
+                            exportTask = Task {
                                 do {
                                     let encoded = try await Task.detached(priority: .userInitiated) {
                                         try GlassOTPBackupCodec.encode(snapshot: snapshot, password: pwd)
                                     }.value
+                                    guard !Task.isCancelled, showingExportPasswordPrompt else {
+                                        isExportingBackup = false
+                                        return
+                                    }
                                     isExportingBackup = false
                                     exportDocument = GlassOTPBackupDocument(data: encoded)
                                     showingExportPasswordPrompt = false
                                 } catch {
+                                    guard !Task.isCancelled else {
+                                        isExportingBackup = false
+                                        return
+                                    }
                                     isExportingBackup = false
-                                    vault.alertMessage = error.localizedDescription
+                                    exportErrorMessage = error.localizedDescription
                                 }
                             }
                         } label: {

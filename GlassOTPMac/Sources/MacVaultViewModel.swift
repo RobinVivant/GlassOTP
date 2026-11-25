@@ -38,7 +38,10 @@ final class MacVaultViewModel {
         didSet { rebuildFolderLookup() }
     }
     var accounts: [OTPAccount] = [] {
-        didSet { rebuildPinnedAccounts() }
+        didSet {
+            rebuildPinnedAccounts()
+            updateMenuBarClockActive()
+        }
     }
     private(set) var pinnedAccounts: [OTPAccount] = []
     @ObservationIgnored private var folderNamesByID: [UUID: String] = [:]
@@ -50,6 +53,7 @@ final class MacVaultViewModel {
     var selectedAccountIndex: Int = 0
 
     private(set) var lastSyncDate: Date?
+    private(set) var iCloudSyncEnabled = true
     private(set) var hasLoadError = false
     var syncError: String?
     var alertMessage: String?
@@ -86,7 +90,7 @@ final class MacVaultViewModel {
             } else {
                 defaults.removeObject(forKey: Self.menuBarAccountKey)
             }
-            clock.setActive(menuBarAccountID != nil, reason: "menuBar")
+            updateMenuBarClockActive()
         }
     }
 
@@ -121,6 +125,7 @@ final class MacVaultViewModel {
     @ObservationIgnored private var autoTypeTask: Task<Void, Never>?
     @ObservationIgnored private var accountTombstones: [OTPTombstone] = []
     @ObservationIgnored private var folderTombstones: [OTPTombstone] = []
+    @ObservationIgnored private var storeGeneration: UInt64 = 0
 
     private static let quickPickerKey = "glassotp.mac.quickPickerHotKey"
     private static let accountHotKeysKey = "glassotp.mac.accountHotKeys"
@@ -130,6 +135,7 @@ final class MacVaultViewModel {
     init(store: KeychainVaultStore = .shared, defaults: UserDefaults = .standard) {
         self.store = store
         self.defaults = defaults
+        self.iCloudSyncEnabled = store.isICloudSyncEnabled()
         self.quickPickerHotKey = Self.loadQuickPickerHotKey(from: defaults)
         self.accountHotKeys = Self.loadAccountHotKeys(from: defaults)
         if let idStr = defaults.string(forKey: Self.menuBarAccountKey),
@@ -141,10 +147,17 @@ final class MacVaultViewModel {
         self.autoTypeOnHotKey = defaults.bool(forKey: Self.autoTypeKey)
         self.launchAtLogin = (SMAppService.mainApp.status == .enabled)
 
-        clock.setActive(menuBarAccountID != nil, reason: "menuBar")
         reloadFromStore()
+        updateMenuBarClockActive()
         registerHotKeys()
         startSyncLoop()
+    }
+
+    private func updateMenuBarClockActive() {
+        let shouldTick = menuBarAccountID.flatMap { id in
+            accounts.first(where: { $0.id == id })
+        }.map { $0.type == .totp && $0.isSupportedAlgorithm } ?? false
+        clock.setActive(shouldTick, reason: "menuBar")
     }
 
     private var isLaunchAtLoginRegistered: Bool {
@@ -235,6 +248,8 @@ final class MacVaultViewModel {
     }
 
     private func applyLoadedSnapshot(_ snapshot: OTPVaultSnapshot?) {
+        storeGeneration &+= 1
+        iCloudSyncEnabled = store.isICloudSyncEnabled()
         if let snapshot {
             let sortedFolders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
             let sortedAccounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
@@ -260,6 +275,7 @@ final class MacVaultViewModel {
             selectedFolderID = nil
             menuBarAccountID = nil
         }
+        updateMenuBarClockActive()
         lastSyncDate = Date()
         hasLoadError = false
         syncError = nil
@@ -270,6 +286,7 @@ final class MacVaultViewModel {
             let snapshot = try store.loadSnapshot()
             applyLoadedSnapshot(snapshot)
         } catch {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
             hasLoadError = true
             syncError = error.localizedDescription
         }
@@ -277,14 +294,16 @@ final class MacVaultViewModel {
 
     func reloadFromStoreAsync() async {
         let store = self.store
+        let expectedGeneration = storeGeneration
         do {
             let loaded = try await Task.detached(priority: .utility) {
                 try store.loadSnapshot()
             }.value
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, storeGeneration == expectedGeneration else { return }
             applyLoadedSnapshot(loaded)
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, storeGeneration == expectedGeneration else { return }
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
             hasLoadError = true
             syncError = error.localizedDescription
         }
@@ -298,6 +317,7 @@ final class MacVaultViewModel {
             alertMessage = message
             return false
         }
+        storeGeneration &+= 1
         let snapshot = OTPVaultSnapshot(
             schemaVersion: 1,
             folders: folders,
@@ -317,21 +337,34 @@ final class MacVaultViewModel {
         }
     }
 
-    func copyCode(for account: OTPAccount, fromDirectHotKey: Bool = false) {
+    @discardableResult
+    func copyCode(
+        for account: OTPAccount,
+        fromDirectHotKey: Bool = false,
+        surfaceExternalErrors: Bool = false
+    ) -> Bool {
+        func fail(_ message: String) -> Bool {
+            if fromDirectHotKey || surfaceExternalErrors {
+                presentExternalAlert(title: "Copy Failed", message: message)
+            } else {
+                alertMessage = message
+            }
+            return false
+        }
+
         guard account.isSupportedAlgorithm else {
-            alertMessage = "\(account.displayTitle) uses legacy \(account.algorithm.displayName), which GlassOTP no longer generates."
-            return
+            return fail("\(account.displayTitle) uses legacy \(account.algorithm.displayName), which GlassOTP no longer generates.")
         }
         let now = Date()
         var effectiveAccount = account
 
         if account.type == .hotp {
             guard !hasLoadError else {
-                alertMessage = "Cannot advance HOTP counter because the Keychain vault failed to load."
-                return
+                return fail("Cannot advance HOTP counter because the Keychain vault failed to load.")
             }
             var reservedAccount: OTPAccount?
             do {
+                storeGeneration &+= 1
                 let updatedSnapshot = try store.mutateSnapshotIfPresent { snapshot in
                     guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }) else {
                         return false
@@ -349,20 +382,18 @@ final class MacVaultViewModel {
                     applyLoadedSnapshot(updatedSnapshot)
                 } else {
                     reloadFromStore()
-                    return
+                    return fail("That account is no longer in your vault.")
                 }
             } catch {
                 syncError = error.localizedDescription
-                alertMessage = error.localizedDescription
-                return
+                return fail(error.localizedDescription)
             }
             guard let verified = reservedAccount else {
                 reloadFromStore()
-                return
+                return fail("That account is no longer in your vault.")
             }
             guard verified.isSupportedAlgorithm else {
-                alertMessage = "\(verified.displayTitle) uses legacy \(verified.algorithm.displayName), which GlassOTP no longer generates."
-                return
+                return fail("\(verified.displayTitle) uses legacy \(verified.algorithm.displayName), which GlassOTP no longer generates.")
             }
             effectiveAccount = verified
         }
@@ -390,6 +421,7 @@ final class MacVaultViewModel {
             remainingSeconds: remaining,
             didAutoType: willAutoType
         )
+        return true
     }
 
     func togglePin(_ account: OTPAccount) {
@@ -418,7 +450,7 @@ final class MacVaultViewModel {
            let accountID = UUID(uuidString: idString) {
             reloadFromStore()
             if let match = accounts.first(where: { $0.id == accountID }) {
-                copyCode(for: match, fromDirectHotKey: false)
+                _ = copyCode(for: match, fromDirectHotKey: false, surfaceExternalErrors: true)
             }
         } else if scheme == "otpauth" || scheme == "otpauth-migration" {
             do {

@@ -233,10 +233,11 @@ public enum OTPUriParser {
             case (4, 0):
                 let val = try reader.readVarint()
                 switch val {
+                case 0, 1: algorithm = .sha1
                 case 2: algorithm = .sha256
                 case 3: algorithm = .sha512
                 case 4: throw OTPUriError.unsupportedAlgorithm("MD5")
-                default: algorithm = .sha1
+                default: throw OTPUriError.unsupportedAlgorithm("enum(\(val))")
                 }
             case (5, 0):
                 let val = try reader.readVarint()

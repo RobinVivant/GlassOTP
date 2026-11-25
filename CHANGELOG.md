@@ -5,17 +5,18 @@ All notable changes to GlassOTP are documented in this file.
 ## [1.2.0] - 2026-11-25
 
 ### Added
-- Interprocess POSIX file locking (`flock`) and a local `ThisDeviceOnly` replica (`local-replica-v1`) in `KeychainVaultStore` so simultaneous iPhone, Widget, and Mac saves reconcile safely with bounded (`500`) tombstones and `counterResetAt` HOTP tracking.
-- Shared App Lock preference (`SharedSecurityPreferences.isAppLockEnabled`) forcing Tap-to-Reveal masking on widgets when Face ID / Touch ID lock is enabled, plus passcode/biometry availability gating on app lock toggle.
-- Explicit Google Favicons disclosure in settings, `README.md`, and `SECURITY.md`, plus `"Unsupported"` status handling across iOS, widgets, and macOS for legacy MD5 accounts from older exports.
-- Actionable `"Retry Deleting iCloud Copy"` control when turning off iCloud Keychain sync leaves a cloud cleanup error.
+- Interprocess POSIX file locking (`flock`, fail-closed on iOS mutations), `ThisDeviceOnly` local replica (`local-replica-v1`), signed iCloud retirement markers (`icloud-sync-marker-v1`), fractional-second ISO-8601 serialization (`VaultSnapshotCoder`), canonical tie-breakers, `tombstoneHorizon` tracking, one-time unscoped legacy migration, and injectable `KeychainBackend` unit tests in `KeychainVaultStore`.
+- True App Lock gating on widgets (`SharedSecurityPreferences.effectiveAppLockEnabled` + `isDiscoverable = false` + widget deep-link routing into locked GlassOTP), plus device-owner authentication before disabling App Lock.
+- Google Favicons disclosures across `SettingsView`, `AutoCategorizeSheet`, `README.md`, and `SECURITY.md`, inline modal error banners, folder-only `.glassotp` restore support, local-only `BrandPickerSheet` grid selection, and `"Unsupported"` status handling for legacy MD5 accounts.
+- Actionable `"Retry Deleting iCloud Copy"` control (reactive on `VaultViewModel.hasPendingICloudCleanup`) when turning off iCloud Keychain sync encounters a cloud cleanup error.
 
 ### Fixed
-- Fixed an infinite Face ID re-lock loop when Auto-Lock is set to "Immediately" by ignoring `isAuthenticating` `.inactive` transitions and clearing `backgroundedAt` on unlock.
-- Fixed iOS camera scanner authorization timing, app-switcher scene-phase recovery, off-MainActor QR photo decoding, torch toolbar gating, and temporary `/Documents/Inbox/` file cleanup after import.
-- Fixed `BrandLogoFetcher` to restrict remote lookups strictly to Google Favicons (`s2/favicons`) over HTTPS port 443 with streaming 512 KiB size enforcement and verified redirect targets.
-- Fixed HOTP counter reservation races in `CopyOTPWidgetIntent`, `CopyMacOTPIntent`, `glassotp://` deep links, and macOS copy actions, plus target-process verification (`postToPid`) for macOS auto-type, hotkey collision prevention, async background sync polling, modal sheet resign guarding, and chronological mixed-period widget timelines.
-- Bumped `GLOTP2` default `scrypt` work factor to `N = 65536` (`log2N = 16`, 64 MiB), enforced the 8-character minimum password check inside `GlassOTPBackupCodec.encode`, normalized hyphenated algorithms in `VaultImporter`, preserved empty folders on full `.glassotp` restore, and bumped bundle versions (`1.2.0`, build `3`).
+- Fixed Face ID auto-lock & cancel loops by ignoring `isAuthenticating` `.inactive` transitions and pausing automatic re-prompts after cancel/error until backgrounding or tapping Unlock.
+- Fixed HOTP credential-generation merging (`secret` + `counter` + parameters carried together), `Store` normalized return values eliminating subsecond `counterResetAt` rollbacks, `loadSnapshotUnlocked` read resilience, and `local-replica-v1` cleanup on iCloud opt-out.
+- Fixed iOS camera scanner authorization timing, `scenePhase` recovery, detached `CIDetector`, torch gating, `RootTabView` staged sheet transitions, duplicate import/export task races, in-app HOTP tap reservation consistency, and `Documents/Inbox` cleanup.
+- Fixed `BrandLogoFetcher` to restrict remote lookups strictly to Google Favicons (`www.google.com/s2/favicons`) over HTTPS port 443 with streaming 512 KiB size enforcement and verified redirect targets.
+- Fixed HOTP counter reservation races in `CopyOTPWidgetIntent`, `CopyMacOTPIntent`, `glassotp://` deep links, and macOS copy actions, plus `postToPid` per-digit auto-type verification, hotkey collision checks, generation-checked async 20s Keychain polling, idle menu-bar clock suppression for HOTP/MD5, and modal-sheet resign guarding.
+- Bumped `GLOTP2` `scrypt` work factor to `N = 65536` (64 MiB), enforced 8-char backup passwords in `encode`, rejected unknown numeric/migration algorithms instead of defaulting to SHA-1, hardened CI secret/identifier checks to cover `[:=]` and `GlassOTP.xcodeproj`, and bumped bundle versions (`1.2.0`, build `3`).
 
 ## [1.1.0] - 2026-11-25
 

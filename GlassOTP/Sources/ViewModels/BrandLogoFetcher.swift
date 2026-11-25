@@ -3,7 +3,7 @@ import GlassOTPCore
 import ImageIO
 import UIKit
 
-private final class LogoRedirectDelegate: NSObject, URLSessionTaskDelegate {
+private final class LogoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private static let allowedGoogleHosts: Set<String> = [
         "google.com",
         "www.google.com",
@@ -46,7 +46,7 @@ private final class LogoRedirectDelegate: NSObject, URLSessionTaskDelegate {
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         lock.withLock {
-            redirectCounts.removeValue(forKey: task.taskIdentifier)
+            _ = redirectCounts.removeValue(forKey: task.taskIdentifier)
         }
     }
 

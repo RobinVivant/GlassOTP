@@ -11,6 +11,7 @@ struct AutoCategorizeSheet: View {
     @State private var fetchWebLogos = false
     @State private var removeEmptyDefaultFolder = true
     @State private var isApplying = false
+    @State private var applyErrorMessage: String?
 
     private var groupedCategories: [(category: OTPCategory, items: [CategorizationItem])] {
         guard let plan else { return [] }
@@ -98,10 +99,16 @@ struct AutoCategorizeSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Fetch web logos for custom domains")
                         .font(.subheadline)
-                    Text("Connects to each domain or Google Favicons to download icons for selected accounts.")
+                    Text("Queries Google Favicons (www.google.com) for selected accounts without a bundled logo.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            if let applyErrorMessage {
+                Label(applyErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
 
             if hasDefaultAccountsFolder {
@@ -247,9 +254,12 @@ struct AutoCategorizeSheet: View {
     }
 
     private func applyNow() {
+        applyErrorMessage = nil
         isApplying = true
         let filteredAssignments = assignments.filter { selectedIDs.contains($0.key) }
         guard vault.applyCategorization(filteredAssignments, removeEmptyDefaultFolder: removeEmptyDefaultFolder) else {
+            applyErrorMessage = vault.alertMessage ?? "Couldn't save categories to Keychain."
+            vault.alertMessage = nil
             isApplying = false
             return
         }

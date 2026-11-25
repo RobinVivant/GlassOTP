@@ -10,6 +10,7 @@ struct FoldersView: View {
     @State private var deletingFolder: OTPFolder?
     @State private var folderName = ""
     @State private var folderSymbol = "folder.fill"
+    @State private var editorErrorMessage: String?
 
     private let symbolOptions = [
         "folder.fill", "house.fill", "briefcase.fill", "server.rack",
@@ -62,6 +63,7 @@ struct FoldersView: View {
                                     editingFolder = folder
                                     folderName = folder.name
                                     folderSymbol = folder.symbolName
+                                    editorErrorMessage = nil
                                     showingEditor = true
                                 } label: {
                                     Label("Edit Folder", systemImage: "pencil")
@@ -95,6 +97,7 @@ struct FoldersView: View {
                     editingFolder = nil
                     folderName = ""
                     folderSymbol = "folder.fill"
+                    editorErrorMessage = nil
                     showingEditor = true
                 } label: {
                     Image(systemName: "plus")
@@ -104,8 +107,19 @@ struct FoldersView: View {
         .sheet(isPresented: $showingEditor) {
             NavigationStack {
                 Form {
+                    if let editorErrorMessage {
+                        Section {
+                            Label(editorErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+                    }
+
                     Section("Folder Name") {
                         TextField("e.g. Work, Personal, Infra", text: $folderName)
+                            .onChange(of: folderName) { _, _ in
+                                editorErrorMessage = nil
+                            }
                     }
                     Section("Icon") {
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 14) {
@@ -143,7 +157,11 @@ struct FoldersView: View {
                                 saved = vault.addFolder(name: folderName, symbolName: folderSymbol)
                             }
                             if saved {
+                                editorErrorMessage = nil
                                 showingEditor = false
+                            } else {
+                                editorErrorMessage = vault.alertMessage ?? "Couldn't save folder."
+                                vault.alertMessage = nil
                             }
                         }
                         .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

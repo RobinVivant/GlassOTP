@@ -58,6 +58,14 @@ public struct OTPFolder: Identifiable, Codable, Hashable, Sendable {
         case id, name, symbolName, sortOrder, updatedAt
     }
 
+    internal var mergeTieBreakKey: String {
+        Self.canonicalJoin([name, symbolName, "\(sortOrder)", id.uuidString])
+    }
+
+    private static func canonicalJoin(_ parts: [String]) -> String {
+        parts.map { "\($0.utf8.count):\($0)" }.joined(separator: ",")
+    }
+
     public init(
         id: UUID = UUID(),
         name: String,
@@ -186,6 +194,29 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         algorithm != .md5
     }
 
+    internal var mergeTieBreakKey: String {
+        let secretDigest = SHA256.hash(data: secret).map { String(format: "%02x", $0) }.joined()
+        let resetEpoch = counterResetAt.map { String(format: "%.6f", $0.timeIntervalSince1970) } ?? "none"
+        let parts = [
+            type.rawValue,
+            issuer,
+            label,
+            algorithm.rawValue,
+            "\(digits)",
+            "\(period)",
+            "\(counter)",
+            resetEpoch,
+            folderID?.uuidString ?? "",
+            isPinned ? "1" : "0",
+            "\(sortOrder)",
+            customBrandSlug ?? "",
+            customLogoDomain ?? "",
+            secretDigest,
+            id.uuidString,
+        ]
+        return parts.map { "\($0.utf8.count):\($0)" }.joined(separator: ",")
+    }
+
     public var displayTitle: String {
         if !issuer.isEmpty {
             return issuer
@@ -266,6 +297,7 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
     public var updatedAt: Date
     public var accountTombstones: [OTPTombstone]
     public var folderTombstones: [OTPTombstone]
+    public var tombstoneHorizon: Date?
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion
@@ -274,6 +306,7 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         case updatedAt
         case accountTombstones
         case folderTombstones
+        case tombstoneHorizon
     }
 
     public init(
@@ -282,7 +315,8 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         accounts: [OTPAccount] = [],
         updatedAt: Date = Date(),
         accountTombstones: [OTPTombstone] = [],
-        folderTombstones: [OTPTombstone] = []
+        folderTombstones: [OTPTombstone] = [],
+        tombstoneHorizon: Date? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.folders = folders
@@ -290,6 +324,7 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         self.updatedAt = updatedAt
         self.accountTombstones = accountTombstones
         self.folderTombstones = folderTombstones
+        self.tombstoneHorizon = tombstoneHorizon
     }
 
     public init(from decoder: Decoder) throws {
@@ -300,6 +335,7 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         self.accountTombstones = try container.decodeIfPresent([OTPTombstone].self, forKey: .accountTombstones) ?? []
         self.folderTombstones = try container.decodeIfPresent([OTPTombstone].self, forKey: .folderTombstones) ?? []
+        self.tombstoneHorizon = try container.decodeIfPresent(Date.self, forKey: .tombstoneHorizon)
     }
 
     public func merged(with incoming: OTPVaultSnapshot, tombstoneLimit: Int? = nil) -> OTPVaultSnapshot {
@@ -312,13 +348,28 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
             }
         }
 
+        let selfFolderIDs = Set(folders.map(\.id))
+        let incomingFolderIDs = Set(incoming.folders.map(\.id))
         var folderMap: [UUID: OTPFolder] = [:]
         for folder in folders {
+            if !incomingFolderIDs.contains(folder.id),
+               let incomingHorizon = incoming.tombstoneHorizon,
+               folder.updatedAt <= incomingHorizon {
+                continue
+            }
             folderMap[folder.id] = folder
         }
         for folder in incoming.folders {
+            if !selfFolderIDs.contains(folder.id),
+               let selfHorizon = tombstoneHorizon,
+               folder.updatedAt <= selfHorizon {
+                continue
+            }
             if let existing = folderMap[folder.id] {
-                if folder.updatedAt >= existing.updatedAt {
+                let incomingWins = folder.updatedAt != existing.updatedAt
+                    ? folder.updatedAt > existing.updatedAt
+                    : folder.mergeTieBreakKey > existing.mergeTieBreakKey
+                if incomingWins {
                     folderMap[folder.id] = folder
                 }
             } else {
@@ -350,28 +401,46 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
             }
         }
 
+        let selfAccountIDs = Set(accounts.map(\.id))
+        let incomingAccountIDs = Set(incoming.accounts.map(\.id))
         var accountMap: [UUID: OTPAccount] = [:]
         for account in accounts {
+            if !incomingAccountIDs.contains(account.id),
+               let incomingHorizon = incoming.tombstoneHorizon,
+               account.updatedAt <= incomingHorizon {
+                continue
+            }
             accountMap[account.id] = account
         }
         for account in incoming.accounts {
+            if !selfAccountIDs.contains(account.id),
+               let selfHorizon = tombstoneHorizon,
+               account.updatedAt <= selfHorizon {
+                continue
+            }
             if let existing = accountMap[account.id] {
-                var winner = account.updatedAt >= existing.updatedAt ? account : existing
-                if existing.type == .hotp && account.type == .hotp {
-                    let existingReset = existing.counterResetAt ?? .distantPast
-                    let incomingReset = account.counterResetAt ?? .distantPast
-                    if incomingReset > existingReset {
-                        winner.counter = account.counter
-                        winner.counterResetAt = account.counterResetAt
-                    } else if existingReset > incomingReset {
-                        winner.counter = existing.counter
-                        winner.counterResetAt = existing.counterResetAt
-                    } else {
-                        let maxCounter = max(existing.counter, account.counter)
-                        if winner.counter != maxCounter {
-                            winner.counter = maxCounter
-                            winner.updatedAt = max(existing.updatedAt, account.updatedAt)
-                        }
+                let incomingWinsMeta = account.updatedAt != existing.updatedAt
+                    ? account.updatedAt > existing.updatedAt
+                    : account.mergeTieBreakKey > existing.mergeTieBreakKey
+                var winner = incomingWinsMeta ? account : existing
+
+                let existingReset = existing.counterResetAt ?? .distantPast
+                let incomingReset = account.counterResetAt ?? .distantPast
+                if incomingReset != existingReset {
+                    let resetSource = incomingReset > existingReset ? account : existing
+                    winner.secret = resetSource.secret
+                    winner.counter = resetSource.counter
+                    winner.counterResetAt = resetSource.counterResetAt
+                    winner.type = resetSource.type
+                    winner.algorithm = resetSource.algorithm
+                    winner.digits = resetSource.digits
+                    winner.period = resetSource.period
+                    winner.updatedAt = max(existing.updatedAt, account.updatedAt)
+                } else if existing.type == .hotp && account.type == .hotp && existing.secret == account.secret {
+                    let maxCounter = max(existing.counter, account.counter)
+                    if winner.counter != maxCounter {
+                        winner.counter = maxCounter
+                        winner.updatedAt = max(existing.updatedAt, account.updatedAt)
                     }
                 }
                 accountMap[account.id] = winner
@@ -399,13 +468,36 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
 
         let sortedFolderTombstones = folderTombstoneMap
             .map { OTPTombstone(id: $0.key, deletedAt: $0.value) }
-            .sorted { $0.deletedAt > $1.deletedAt }
+            .sorted {
+                if $0.deletedAt != $1.deletedAt { return $0.deletedAt > $1.deletedAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }
         let sortedAccountTombstones = accountTombstoneMap
             .map { OTPTombstone(id: $0.key, deletedAt: $0.value) }
-            .sorted { $0.deletedAt > $1.deletedAt }
+            .sorted {
+                if $0.deletedAt != $1.deletedAt { return $0.deletedAt > $1.deletedAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }
 
-        let finalFolderTombstones = tombstoneLimit.map { Array(sortedFolderTombstones.prefix($0)) } ?? sortedFolderTombstones
-        let finalAccountTombstones = tombstoneLimit.map { Array(sortedAccountTombstones.prefix($0)) } ?? sortedAccountTombstones
+        var finalHorizon: Date? = [tombstoneHorizon, incoming.tombstoneHorizon].compactMap { $0 }.max()
+
+        let finalFolderTombstones: [OTPTombstone]
+        if let tombstoneLimit, sortedFolderTombstones.count > tombstoneLimit {
+            finalFolderTombstones = Array(sortedFolderTombstones.prefix(tombstoneLimit))
+            let droppedMax = sortedFolderTombstones.dropFirst(tombstoneLimit).map(\.deletedAt).max()
+            finalHorizon = [finalHorizon, droppedMax].compactMap { $0 }.max()
+        } else {
+            finalFolderTombstones = sortedFolderTombstones
+        }
+
+        let finalAccountTombstones: [OTPTombstone]
+        if let tombstoneLimit, sortedAccountTombstones.count > tombstoneLimit {
+            finalAccountTombstones = Array(sortedAccountTombstones.prefix(tombstoneLimit))
+            let droppedMax = sortedAccountTombstones.dropFirst(tombstoneLimit).map(\.deletedAt).max()
+            finalHorizon = [finalHorizon, droppedMax].compactMap { $0 }.max()
+        } else {
+            finalAccountTombstones = sortedAccountTombstones
+        }
 
         return OTPVaultSnapshot(
             schemaVersion: max(schemaVersion, incoming.schemaVersion),
@@ -413,8 +505,47 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
             accounts: mergedAccounts,
             updatedAt: max(updatedAt, incoming.updatedAt),
             accountTombstones: finalAccountTombstones,
-            folderTombstones: finalFolderTombstones
+            folderTombstones: finalFolderTombstones,
+            tombstoneHorizon: finalHorizon
         )
+    }
+}
+
+public enum VaultSnapshotCoder {
+    public static func encodeValue<T: Encodable>(_ value: T) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date))
+        }
+        return try encoder.encode(value)
+    }
+
+    public static func decodeValue<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+            if let date = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(string) {
+                return date
+            }
+            if let legacy = try? Date.ISO8601FormatStyle(includingFractionalSeconds: false).parse(string) {
+                return legacy
+            }
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid ISO8601 date: \(string)"
+            )
+        }
+        return try decoder.decode(type, from: data)
+    }
+
+    public static func encode(_ snapshot: OTPVaultSnapshot) throws -> Data {
+        try encodeValue(snapshot)
+    }
+
+    public static func decode(from data: Data) throws -> OTPVaultSnapshot {
+        try decodeValue(OTPVaultSnapshot.self, from: data)
     }
 }
 

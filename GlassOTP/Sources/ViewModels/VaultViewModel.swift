@@ -52,6 +52,7 @@ final class VaultViewModel {
     }
 
     private(set) var iCloudSyncEnabled: Bool
+    private(set) var hasPendingICloudCleanup: Bool
     private(set) var hasLoadError = false
 
     var hideCodesInApp: Bool {
@@ -81,9 +82,11 @@ final class VaultViewModel {
     init(store: KeychainVaultStore = .shared) {
         self.store = store
         self.iCloudSyncEnabled = store.isICloudSyncEnabled()
+        self.hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
         self.hideCodesInApp = UserDefaults.standard.bool(forKey: Self.hideCodesKey)
         self.universalClipboardEnabled = SharedClipboardPreferences.isUniversalClipboardEnabled
         self.dismissedAutoCategorizeBanner = UserDefaults.standard.bool(forKey: Self.dismissBannerKey)
+        purgeStaleInboxFiles()
         reloadFromStore()
     }
 
@@ -143,14 +146,18 @@ final class VaultViewModel {
             self.selectedFolderID = nil
         }
         hasLoadError = false
+        hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
     }
 
     func reloadFromStore() {
         do {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             if let snapshot = try store.loadSnapshot() {
+                iCloudSyncEnabled = store.isICloudSyncEnabled()
                 applySnapshotToMemory(snapshot)
             } else {
+                iCloudSyncEnabled = store.isICloudSyncEnabled()
                 folders = []
                 accounts = []
                 accountTombstones = []
@@ -160,6 +167,7 @@ final class VaultViewModel {
             }
         } catch {
             hasLoadError = true
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             alertMessage = error.localizedDescription
         }
     }
@@ -168,13 +176,23 @@ final class VaultViewModel {
         do {
             let migrated = try store.setICloudSyncEnabled(enabled, removeOppositeBucket: removeFromICloud)
             iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             if let migrated {
                 applySnapshotToMemory(migrated)
             }
             hasLoadError = false
             WidgetCenter.shared.reloadAllTimelines()
+        } catch let error as KeychainVaultError {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if case .cloudCleanupFailed = error {
+                reloadFromStore()
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+            alertMessage = error.localizedDescription
         } catch {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             alertMessage = error.localizedDescription
         }
     }
@@ -182,8 +200,10 @@ final class VaultViewModel {
     func retryPendingICloudCleanup() {
         do {
             try store.retryPendingICloudCleanup()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             alertMessage = "Deleted the leftover iCloud Keychain copy."
         } catch {
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             alertMessage = error.localizedDescription
         }
     }
@@ -227,7 +247,49 @@ final class VaultViewModel {
             alertMessage = "\(account.displayTitle) uses legacy \(account.algorithm.displayName), which GlassOTP no longer generates."
             return
         }
-        let snapshot = OTPGenerator.snapshot(for: account, at: date)
+
+        var effectiveAccount = account
+        if account.type == .hotp {
+            guard !hasLoadError else {
+                alertMessage = "Cannot advance HOTP counter because the existing Keychain vault could not be loaded."
+                return
+            }
+            var reservedAccount: OTPAccount?
+            do {
+                if let updatedSnapshot = try store.mutateSnapshotIfPresent({ snapshot in
+                    guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }) else {
+                        return false
+                    }
+                    let current = snapshot.accounts[idx]
+                    reservedAccount = current
+                    guard current.isSupportedAlgorithm else {
+                        return false
+                    }
+                    snapshot.accounts[idx].counter &+= 1
+                    snapshot.accounts[idx].updatedAt = date
+                    return true
+                }) {
+                    applySnapshotToMemory(updatedSnapshot)
+                } else {
+                    reloadFromStore()
+                    return
+                }
+            } catch {
+                alertMessage = error.localizedDescription
+                return
+            }
+            guard let verifiedAccount = reservedAccount else {
+                reloadFromStore()
+                return
+            }
+            guard verifiedAccount.isSupportedAlgorithm else {
+                alertMessage = "\(verifiedAccount.displayTitle) uses legacy \(verifiedAccount.algorithm.displayName), which GlassOTP no longer generates."
+                return
+            }
+            effectiveAccount = verifiedAccount
+        }
+
+        let snapshot = OTPGenerator.snapshot(for: effectiveAccount, at: date)
         OTPClipboardWriter.copyOTP(snapshot.code)
 
         let generator = UINotificationFeedbackGenerator()
@@ -238,11 +300,11 @@ final class VaultViewModel {
             pendingForegroundCopyCode = snapshot.code
         }
 
-        SharedWidgetStateStore.recordCopy(accountID: account.id, at: date)
-        if reloadWidgets {
+        SharedWidgetStateStore.recordCopy(accountID: effectiveAccount.id, at: date)
+        if reloadWidgets || effectiveAccount.type == .hotp {
             WidgetCenter.shared.reloadAllTimelines()
         }
-        showToast(title: account.displayTitle, formattedCode: snapshot.formattedCode)
+        showToast(title: effectiveAccount.displayTitle, formattedCode: snapshot.formattedCode)
     }
 
     func incrementHOTP(for account: OTPAccount) {
@@ -347,16 +409,20 @@ final class VaultViewModel {
         }
     }
 
-    func updateBrandOverride(for account: OTPAccount, brandSlug: String?, customDomain: String?) {
+    @discardableResult
+    func updateBrandOverride(for account: OTPAccount, brandSlug: String?, customDomain: String?) -> Bool {
         let prevAccounts = accounts
-        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
+        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return false }
         accounts[index].customBrandSlug = brandSlug
         accounts[index].customLogoDomain = customDomain
         accounts[index].updatedAt = Date()
         if persist() {
             bumpLogoRevision()
+            WidgetCenter.shared.reloadAllTimelines()
+            return true
         } else {
             accounts = prevAccounts
+            return false
         }
     }
 
@@ -480,6 +546,7 @@ final class VaultViewModel {
 
     struct ImportSummary {
         let addedCount: Int
+        let addedFoldersCount: Int
         let skippedDuplicates: Int
         let saved: Bool
     }
@@ -502,9 +569,15 @@ final class VaultViewModel {
             preserveEmptyFolders: preserveEmptyFolders
         )
 
+        let addedFoldersCount = max(0, plan.folders.count - folders.count)
         let foldersChanged = plan.folders != folders
         guard plan.addedCount > 0 || (preserveEmptyFolders && foldersChanged) else {
-            return ImportSummary(addedCount: 0, skippedDuplicates: plan.skippedDuplicateCount, saved: true)
+            return ImportSummary(
+                addedCount: 0,
+                addedFoldersCount: 0,
+                skippedDuplicates: plan.skippedDuplicateCount,
+                saved: true
+            )
         }
 
         let prevFolders = folders
@@ -516,7 +589,12 @@ final class VaultViewModel {
             folders = prevFolders
             accounts = prevAccounts
         }
-        return ImportSummary(addedCount: saved ? plan.addedCount : 0, skippedDuplicates: plan.skippedDuplicateCount, saved: saved)
+        return ImportSummary(
+            addedCount: saved ? plan.addedCount : 0,
+            addedFoldersCount: saved ? addedFoldersCount : 0,
+            skippedDuplicates: plan.skippedDuplicateCount,
+            saved: saved
+        )
     }
 
     func dismissSensitivePresentationsForLock() {
@@ -550,6 +628,9 @@ final class VaultViewModel {
 
     func handleIncomingURL(_ url: URL, isLocked: Bool = false) {
         if isLocked {
+            if let oldPending = pendingIncomingURL, oldPending != url {
+                cleanupInboxFileIfNeeded(oldPending)
+            }
             pendingIncomingURL = url
             return
         }
@@ -558,9 +639,7 @@ final class VaultViewModel {
             let scoped = url.startAccessingSecurityScopedResource()
             defer {
                 if scoped { url.stopAccessingSecurityScopedResource() }
-                if url.standardizedFileURL.path.contains("/Documents/Inbox/") {
-                    try? FileManager.default.removeItem(at: url)
-                }
+                cleanupInboxFileIfNeeded(url)
             }
             do {
                 let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey])
@@ -604,46 +683,29 @@ final class VaultViewModel {
             guard let match = accounts.first(where: { $0.id == accountID }) else {
                 return
             }
-            guard match.isSupportedAlgorithm else {
-                alertMessage = "\(match.displayTitle) uses legacy \(match.algorithm.displayName), which GlassOTP no longer generates."
-                return
-            }
-            if match.type == .hotp {
-                guard !hasLoadError else {
-                    alertMessage = "Cannot advance HOTP counter because the existing Keychain vault could not be loaded."
-                    return
-                }
-                let now = Date()
-                var reservedAccount: OTPAccount?
-                do {
-                    if let updatedSnapshot = try store.mutateSnapshotIfPresent({ snapshot in
-                        guard let idx = snapshot.accounts.firstIndex(where: { $0.id == accountID }),
-                              snapshot.accounts[idx].isSupportedAlgorithm else {
-                            return false
-                        }
-                        reservedAccount = snapshot.accounts[idx]
-                        snapshot.accounts[idx].counter &+= 1
-                        snapshot.accounts[idx].updatedAt = now
-                        return true
-                    }) {
-                        applySnapshotToMemory(updatedSnapshot)
-                    } else {
-                        reloadFromStore()
-                    }
-                } catch {
-                    alertMessage = error.localizedDescription
-                    return
-                }
-                guard let verifiedAccount = reservedAccount else {
-                    reloadFromStore()
-                    return
-                }
-                selectedFolderID = verifiedAccount.folderID
-                copyCode(for: verifiedAccount, at: now, reloadWidgets: true)
-            } else {
-                selectedFolderID = match.folderID
-                copyCode(for: match, reloadWidgets: true)
-            }
+            selectedFolderID = match.folderID
+            copyCode(for: match, reloadWidgets: true)
+        }
+    }
+
+    private func cleanupInboxFileIfNeeded(_ url: URL) {
+        guard url.isFileURL,
+              url.standardizedFileURL.path.contains("/Documents/Inbox/") else {
+            return
+        }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private func purgeStaleInboxFiles() {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let inbox = docs.appendingPathComponent("Inbox", isDirectory: true)
+        guard let contents = try? FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil) else {
+            return
+        }
+        for fileURL in contents {
+            try? FileManager.default.removeItem(at: fileURL)
         }
     }
 

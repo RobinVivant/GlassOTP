@@ -521,5 +521,32 @@ struct VaultImporterTests {
         #expect(res.accounts.count == 1)
         #expect(res.accounts[0].algorithm == .sha512)
         #expect(res.skippedEntries == 1)
+
+        // Stratum / Authenticator Pro unknown numeric algorithm is skipped instead of falling back to SHA-1
+        let apUnknownAlgo = Data("""
+        {
+          "Authenticators": [
+            { "Type": 2, "Issuer": "Valid", "Username": "a", "Secret": "JBSWY3DPEHPK3PXP", "Algorithm": 0, "Digits": 6, "Period": 30 },
+            { "Type": 2, "Issuer": "UnknownNum", "Username": "b", "Secret": "JBSWY3DPEHPK3PXP", "Algorithm": 9, "Digits": 6, "Period": 30 }
+          ]
+        }
+        """.utf8)
+        let apRes = try VaultImporter.importFile(data: apUnknownAlgo)
+        #expect(apRes.accounts.count == 1)
+        #expect(apRes.accounts[0].issuer == "Valid")
+        #expect(apRes.skippedEntries == 1)
+
+        // Google migration unknown enum algorithm throws unsupportedAlgorithm
+        var entry = Data()
+        entry.append(contentsOf: [0x0A, 0x05])
+        entry.append(Data("12345".utf8))
+        entry.append(contentsOf: [0x20, 0x09]) // field 4 (algorithm) = 9
+        var migration = Data()
+        migration.append(contentsOf: [0x0A, UInt8(entry.count)])
+        migration.append(entry)
+        let encoded = migration.base64EncodedString().addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+        #expect(throws: OTPUriError.unsupportedAlgorithm("enum(9)")) {
+            try OTPUriParser.parse("otpauth-migration://offline?data=\(encoded)")
+        }
     }
 }

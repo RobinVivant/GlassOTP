@@ -774,9 +774,12 @@ public enum VaultImporter {
             let algorithm: OTPAlgorithm
             if let algoInt = intValue(entry["Algorithm"]) {
                 switch algoInt {
+                case 0: algorithm = .sha1
                 case 1: algorithm = .sha256
                 case 2: algorithm = .sha512
-                default: algorithm = .sha1
+                default:
+                    skippedEntries += 1
+                    continue
                 }
             } else if let parsedAlgo = parseAlgorithm(entry["Algorithm"] as? String) {
                 algorithm = parsedAlgo

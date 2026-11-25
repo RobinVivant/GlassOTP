@@ -6,6 +6,7 @@ struct AccountEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let existingAccount: OTPAccount?
+    var onOpenBrandPicker: ((OTPAccount) -> Void)? = nil
 
     @State private var issuer: String
     @State private var label: String
@@ -18,9 +19,15 @@ struct AccountEditorSheet: View {
     @State private var folderID: UUID?
     @State private var isPinned: Bool
     @State private var showAdvanced = false
+    @State private var saveErrorMessage: String?
 
-    init(account: OTPAccount?, defaultFolderID: UUID?) {
+    init(
+        account: OTPAccount?,
+        defaultFolderID: UUID?,
+        onOpenBrandPicker: ((OTPAccount) -> Void)? = nil
+    ) {
         self.existingAccount = account
+        self.onOpenBrandPicker = onOpenBrandPicker
         _issuer = State(initialValue: account?.issuer ?? "")
         _label = State(initialValue: account?.label ?? "")
         _base32Secret = State(initialValue: account.map { Base32.encode($0.secret) } ?? "")
@@ -31,6 +38,7 @@ struct AccountEditorSheet: View {
         _counter = State(initialValue: account?.counter ?? 0)
         _folderID = State(initialValue: account?.folderID ?? defaultFolderID)
         _isPinned = State(initialValue: account?.isPinned ?? false)
+        _showAdvanced = State(initialValue: account?.algorithm == .md5)
     }
 
     private var decodedSecret: Data? {
@@ -42,7 +50,7 @@ struct AccountEditorSheet: View {
     }
 
     private var previewCode: String? {
-        guard let secret = decodedSecret else { return nil }
+        guard algorithm != .md5, let secret = decodedSecret else { return nil }
         let temp = OTPAccount(
             issuer: issuer,
             label: label,
@@ -62,7 +70,24 @@ struct AccountEditorSheet: View {
                 AmbientGlassBackground()
 
                 Form {
-                    if let previewCode {
+                    if let saveErrorMessage {
+                        Section {
+                            Label(saveErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+                    }
+
+                    if algorithm == .md5 {
+                        Section("Legacy Algorithm") {
+                            Label(
+                                "MD5 is no longer supported for generating codes. Choose SHA1, SHA256, or SHA512 under Advanced OTP Parameters to use this account.",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                        }
+                    } else if let previewCode {
                         Section("Live Preview") {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -117,8 +142,13 @@ struct AccountEditorSheet: View {
                         if let existingAccount {
                             if vault.accounts.contains(where: { $0.id == existingAccount.id }) {
                                 Button {
-                                    dismiss()
-                                    vault.brandPickerAccount = existingAccount
+                                    if let onOpenBrandPicker {
+                                        onOpenBrandPicker(existingAccount)
+                                        dismiss()
+                                    } else {
+                                        dismiss()
+                                        vault.brandPickerAccount = existingAccount
+                                    }
                                 } label: {
                                     HStack {
                                         Label("Service Logo", systemImage: "sparkles")
@@ -144,6 +174,9 @@ struct AccountEditorSheet: View {
                             }
 
                             Picker("Algorithm", selection: $algorithm) {
+                                if algorithm == .md5 {
+                                    Text("MD5 (Unsupported)").tag(OTPAlgorithm.md5)
+                                }
                                 ForEach(OTPAlgorithm.selectableCases) { algo in
                                     Text(algo.displayName).tag(algo)
                                 }
@@ -179,11 +212,17 @@ struct AccountEditorSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         guard let secret = decodedSecret else { return }
+                        saveErrorMessage = nil
                         let resolvedResetAt: Date?
                         if let existingAccount {
                             let secretChanged = existingAccount.secret != secret
                             let counterChanged = (type == .hotp && existingAccount.counter != counter)
-                            resolvedResetAt = (secretChanged || counterChanged) ? Date() : existingAccount.counterResetAt
+                            if secretChanged || counterChanged {
+                                let floor = (existingAccount.counterResetAt ?? .distantPast).addingTimeInterval(0.002)
+                                resolvedResetAt = max(Date(), floor)
+                            } else {
+                                resolvedResetAt = existingAccount.counterResetAt
+                            }
                         } else {
                             resolvedResetAt = nil
                         }
@@ -208,9 +247,12 @@ struct AccountEditorSheet: View {
                         )
                         if vault.upsertAccount(updated) {
                             dismiss()
+                        } else {
+                            saveErrorMessage = vault.alertMessage ?? "Couldn't save account changes to Keychain."
+                            vault.alertMessage = nil
                         }
                     }
-                    .disabled(decodedSecret == nil || (issuer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                    .disabled(algorithm == .md5 || decodedSecret == nil || (issuer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 }
             }
         }

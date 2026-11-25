@@ -29,6 +29,7 @@ struct OTPWidgetEntry: TimelineEntry {
     let requireTapToReveal: Bool
     let universalClipboardEnabled: Bool
     let hasVaultError: Bool
+    let isAppLocked: Bool
 }
 
 struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
@@ -81,7 +82,8 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
             ],
             requireTapToReveal: false,
             universalClipboardEnabled: SharedClipboardPreferences.isUniversalClipboardEnabled,
-            hasVaultError: false
+            hasVaultError: false,
+            isAppLocked: false
         )
     }
 
@@ -94,7 +96,8 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
         let loaded = loadAccounts(configuration: configuration)
         let accounts = loaded.accounts
         let universalClipboardEnabled = SharedClipboardPreferences.isUniversalClipboardEnabled
-        let effectiveRequireTapToReveal = configuration.requireTapToReveal || SharedSecurityPreferences.isAppLockEnabled
+        let isAppLocked = SharedSecurityPreferences.effectiveAppLockEnabled
+        let effectiveRequireTapToReveal = configuration.requireTapToReveal || isAppLocked
 
         if accounts.isEmpty {
             let emptyEntry = OTPWidgetEntry(
@@ -102,7 +105,8 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                 items: [],
                 requireTapToReveal: effectiveRequireTapToReveal,
                 universalClipboardEnabled: universalClipboardEnabled,
-                hasVaultError: loaded.hasError
+                hasVaultError: loaded.hasError,
+                isAppLocked: isAppLocked
             )
             return Timeline(entries: [emptyEntry], policy: .after(now.addingTimeInterval(loaded.hasError ? 60 : 300)))
         }
@@ -126,11 +130,12 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
         }
 
         for account in activeAccounts {
-            if effectiveRequireTapToReveal,
+            if effectiveRequireTapToReveal && !isAppLocked,
                let expiry = SharedWidgetStateStore.revealExpiry(accountID: account.id, now: now) {
                 boundaryDates.append(expiry)
             }
-            if let copyExpiry = SharedWidgetStateStore.copyExpiry(accountID: account.id, now: now) {
+            if !isAppLocked,
+               let copyExpiry = SharedWidgetStateStore.copyExpiry(accountID: account.id, now: now) {
                 boundaryDates.append(copyExpiry)
             }
         }
@@ -142,7 +147,8 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                 accounts: accounts,
                 requireTapToReveal: effectiveRequireTapToReveal,
                 universalClipboardEnabled: universalClipboardEnabled,
-                hasVaultError: false
+                hasVaultError: false,
+                isAppLocked: isAppLocked
             )
         }
         return Timeline(entries: entries, policy: .atEnd)
@@ -172,13 +178,15 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
 
     private func makeEntry(at date: Date, configuration: OTPWidgetConfigIntent) -> OTPWidgetEntry {
         let loaded = loadAccounts(configuration: configuration)
-        let effectiveRequireTapToReveal = configuration.requireTapToReveal || SharedSecurityPreferences.isAppLockEnabled
+        let isAppLocked = SharedSecurityPreferences.effectiveAppLockEnabled
+        let effectiveRequireTapToReveal = configuration.requireTapToReveal || isAppLocked
         return makeEntry(
             at: date,
             accounts: loaded.accounts,
             requireTapToReveal: effectiveRequireTapToReveal,
             universalClipboardEnabled: SharedClipboardPreferences.isUniversalClipboardEnabled,
-            hasVaultError: loaded.hasError
+            hasVaultError: loaded.hasError,
+            isAppLocked: isAppLocked
         )
     }
 
@@ -187,13 +195,14 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
         accounts: [OTPAccount],
         requireTapToReveal: Bool,
         universalClipboardEnabled: Bool,
-        hasVaultError: Bool
+        hasVaultError: Bool,
+        isAppLocked: Bool
     ) -> OTPWidgetEntry {
         let items = accounts.prefix(4).map { account in
             let supported = account.isSupportedAlgorithm
             let codeSnapshot = OTPGenerator.snapshot(for: account, at: date, includeNextCode: false)
-            let isRevealed = !requireTapToReveal || SharedWidgetStateStore.isRevealed(accountID: account.id, now: date)
-            let wasCopied = supported && SharedWidgetStateStore.wasRecentlyCopied(accountID: account.id, now: date)
+            let isRevealed = !isAppLocked && (!requireTapToReveal || SharedWidgetStateStore.isRevealed(accountID: account.id, now: date))
+            let wasCopied = !isAppLocked && supported && SharedWidgetStateStore.wasRecentlyCopied(accountID: account.id, now: date)
             let brand = account.brandStyle
             let matchedBrand = BrandCatalog.shared.match(account: account)
             let customDomain = BrandCatalog.cleanedDomain(account.customLogoDomain)
@@ -224,7 +233,8 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
             items: items,
             requireTapToReveal: requireTapToReveal,
             universalClipboardEnabled: universalClipboardEnabled,
-            hasVaultError: hasVaultError
+            hasVaultError: hasVaultError,
+            isAppLocked: isAppLocked
         )
     }
 }
@@ -236,7 +246,14 @@ struct GlassOTPWidgetEntryView: View {
     var body: some View {
         Group {
             if entry.items.isEmpty {
-                emptyOrErrorWidgetView
+                if family == .accessoryInline {
+                    Label(
+                        entry.hasVaultError ? "Vault Unavailable" : "GlassOTP: Open App",
+                        systemImage: entry.hasVaultError ? "exclamationmark.triangle.fill" : "lock.shield.fill"
+                    )
+                } else {
+                    emptyOrErrorWidgetView
+                }
             } else {
                 switch family {
                 case .systemSmall:
@@ -456,7 +473,10 @@ struct GlassOTPWidgetEntryView: View {
         for item: OTPWidgetItem,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        if item.isMasked {
+        if entry.isAppLocked {
+            content()
+                .accessibilityLabel("Open GlassOTP to view \(item.title)")
+        } else if item.isMasked {
             Button(intent: RevealOTPWidgetIntent(accountID: item.id)) {
                 content()
             }
@@ -474,6 +494,9 @@ struct GlassOTPWidgetEntryView: View {
     }
 
     private func lockScreenActionSymbol(for item: OTPWidgetItem) -> String {
+        if entry.isAppLocked {
+            return "lock.fill"
+        }
         if item.isMasked {
             return "eye.fill"
         }
@@ -505,7 +528,23 @@ struct GlassOTPWidgetEntryView: View {
 
     @ViewBuilder
     private func actionButton(for item: OTPWidgetItem, compact: Bool, allowLink: Bool) -> some View {
-        if item.isMasked {
+        if entry.isAppLocked {
+            let side: CGFloat = compact ? 28 : 34
+            let badge = Image(systemName: "lock.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: side, height: side)
+                .background(.quaternary.opacity(0.65), in: Circle())
+            if allowLink {
+                Link(destination: URL(string: "glassotp://account/\(item.id.uuidString)")!) {
+                    badge
+                }
+                .accessibilityLabel("Unlock GlassOTP for \(item.title)")
+            } else {
+                badge
+                    .accessibilityLabel("Unlock GlassOTP for \(item.title)")
+            }
+        } else if item.isMasked {
             Button(intent: RevealOTPWidgetIntent(accountID: item.id)) {
                 Image(systemName: "eye.fill")
                     .font(.caption.weight(.semibold))

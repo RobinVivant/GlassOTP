@@ -77,14 +77,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            let account = vault.accounts.first(where: { $0.id == pinnedID }) {
             if !account.isSupportedAlgorithm {
                 button.title = " Unsupported"
-            } else {
+            } else if account.type == .totp {
                 let snapshot = OTPGenerator.snapshot(for: account, at: vault.clock.now, includeNextCode: false)
-                if account.type == .totp {
-                    let remaining = max(0, Int(ceil(snapshot.remainingSeconds)))
-                    button.title = " \(snapshot.formattedCode) • \(remaining)s"
-                } else {
-                    button.title = " \(snapshot.formattedCode)"
-                }
+                let remaining = max(0, Int(ceil(snapshot.remainingSeconds)))
+                button.title = " \(snapshot.formattedCode) • \(remaining)s"
+            } else {
+                let snapshot = OTPGenerator.snapshot(for: account, at: Date(), includeNextCode: false)
+                button.title = " \(snapshot.formattedCode)"
             }
             button.toolTip = "\(account.displayTitle) • GlassOTP"
         } else {

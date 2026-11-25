@@ -134,6 +134,9 @@ struct GlassOTPApp: App {
                     vault.processPendingIncomingURLIfUnlocked(isLocked: false)
                 }
             }
+            .onChange(of: security.isAuthenticating) { _, _ in
+                syncPrivacyCover()
+            }
         }
     }
 

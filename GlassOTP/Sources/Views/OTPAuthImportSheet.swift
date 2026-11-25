@@ -15,6 +15,7 @@ struct OTPAuthImportSheet: View {
     @State private var errorMessage: String?
     @State private var showingFilePicker = false
     @State private var isDecrypting = false
+    @State private var hasDecodedImport = false
     @State private var activeTask: Task<Void, Never>?
 
     @State private var decryptedFormat: String?
@@ -51,7 +52,7 @@ struct OTPAuthImportSheet: View {
 
                 ScrollView {
                     VStack(spacing: 18) {
-                        if !decryptedAccounts.isEmpty {
+                        if hasDecodedImport {
                             reviewStepView
                         } else if isDecrypting && detectedEncryptedFormat == nil {
                             loadingStepView
@@ -88,7 +89,7 @@ struct OTPAuthImportSheet: View {
                 }
             }
             .onAppear {
-                if selectedFile == nil, decryptedAccounts.isEmpty, let initialFile {
+                if selectedFile == nil, !hasDecodedImport, let initialFile {
                     handleSelectedFile(initialFile)
                 }
             }
@@ -195,8 +196,12 @@ struct OTPAuthImportSheet: View {
                     Button("Change") {
                         activeTask?.cancel()
                         isDecrypting = false
+                        hasDecodedImport = false
                         selectedFile = nil
                         detectedEncryptedFormat = nil
+                        decryptedFormat = nil
+                        decryptedFolders = []
+                        decryptedAccounts = []
                         password = ""
                         errorMessage = nil
                     }
@@ -207,6 +212,7 @@ struct OTPAuthImportSheet: View {
 
                 SecureField("Backup Password", text: $password)
                     .textContentType(.password)
+                    .disabled(isDecrypting)
                     .padding(14)
                     .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .submitLabel(.go)
@@ -250,6 +256,24 @@ struct OTPAuthImportSheet: View {
         let selectedAccounts = decryptedAccounts.filter { selectedAccountIDs.contains($0.id) }
         let duplicateCount = selectedAccounts.filter { existing.contains($0.fingerprint) }.count
         let finalImportCount = skipDuplicates ? (selectedAccounts.count - duplicateCount) : selectedAccounts.count
+        let preserveEmpty = decryptedFormat == "GlassOTP Encrypted Backup"
+            && selectedAccounts.count == decryptedAccounts.count
+        let previewPlan = VaultImportReconciler.reconcile(
+            importedAccounts: selectedAccounts,
+            importedFolders: decryptedFolders,
+            existingAccounts: vault.accounts,
+            existingFolders: vault.folders,
+            skipDuplicates: skipDuplicates,
+            preserveEmptyFolders: preserveEmpty
+        )
+        let newFolderCount = max(0, previewPlan.folders.count - vault.folders.count)
+        let canImport = finalImportCount > 0 || (preserveEmpty && newFolderCount > 0)
+        let buttonTitle: String = {
+            if finalImportCount == 0 && newFolderCount > 0 {
+                return "Import \(newFolderCount) \(newFolderCount == 1 ? "Folder" : "Folders")"
+            }
+            return "Import \(finalImportCount) \(finalImportCount == 1 ? "Account" : "Accounts")"
+        }()
 
         return VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 10) {
@@ -300,8 +324,6 @@ struct OTPAuthImportSheet: View {
                 }
 
                 Button {
-                    let preserveEmpty = decryptedFormat == "GlassOTP Encrypted Backup"
-                        && selectedAccounts.count == decryptedAccounts.count
                     let summary = vault.importAccounts(
                         selectedAccounts,
                         folders: decryptedFolders,
@@ -310,10 +332,14 @@ struct OTPAuthImportSheet: View {
                     )
                     guard summary.saved else {
                         errorMessage = vault.alertMessage ?? "Couldn't save imported accounts to Keychain."
+                        vault.alertMessage = nil
                         return
                     }
                     let count = summary.addedCount
-                    if skippedEntriesCount > 0 && count > 0 {
+                    let folderCount = summary.addedFoldersCount
+                    if count == 0 && folderCount > 0 {
+                        vault.alertMessage = "Imported \(folderCount) \(folderCount == 1 ? "folder" : "folders") into GlassOTP."
+                    } else if skippedEntriesCount > 0 && count > 0 {
                         vault.alertMessage = "Imported \(count) \(count == 1 ? "account" : "accounts") into GlassOTP (\(skippedEntriesCount) unsupported skipped)."
                     } else {
                         vault.alertMessage = count == 0
@@ -323,13 +349,13 @@ struct OTPAuthImportSheet: View {
                     onDismissCleanup()
                     dismiss()
                 } label: {
-                    Text("Import \(finalImportCount) \(finalImportCount == 1 ? "Account" : "Accounts")")
+                    Text(buttonTitle)
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.glassProminent)
-                .disabled(finalImportCount == 0)
+                .disabled(!canImport)
             }
             .padding(18)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -477,6 +503,7 @@ struct OTPAuthImportSheet: View {
                         skippedEntriesCount = result.skippedEntries
                         selectedAccountIDs = Set(result.accounts.map(\.id))
                         existingFingerprints = vault.existingFingerprints()
+                        hasDecodedImport = true
                         isDecrypting = false
                     }
                 } catch {
@@ -516,7 +543,7 @@ struct OTPAuthImportSheet: View {
     }
 
     private func decryptSelectedFile() {
-        guard let file = selectedFile else { return }
+        guard !isDecrypting, !password.isEmpty, let file = selectedFile else { return }
         activeTask?.cancel()
         isDecrypting = true
         errorMessage = nil
@@ -542,6 +569,7 @@ struct OTPAuthImportSheet: View {
                     skippedEntriesCount = result.skippedEntries
                     selectedAccountIDs = Set(result.accounts.map(\.id))
                     existingFingerprints = vault.existingFingerprints()
+                    hasDecodedImport = true
                     isDecrypting = false
                 }
             } catch {

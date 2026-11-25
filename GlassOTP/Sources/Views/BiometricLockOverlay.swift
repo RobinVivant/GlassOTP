@@ -39,7 +39,7 @@ struct BiometricLockOverlay: View {
                 }
 
                 Button {
-                    Task { await security.authenticate() }
+                    Task { await security.authenticate(userInitiated: true) }
                 } label: {
                     Label("Unlock with \(security.biometryDisplayName)", systemImage: security.biometrySymbolName)
                         .font(.headline)

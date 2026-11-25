@@ -519,4 +519,109 @@ struct OTPCoreTests {
         #expect(SharedWidgetStateStore.copyExpiry(accountID: testID, now: t0.addingTimeInterval(2.5)) == nil)
         #expect(!SharedWidgetStateStore.wasRecentlyCopied(accountID: testID, now: t0.addingTimeInterval(2.5)))
     }
+
+    @Test("VaultSnapshotCoder preserves subsecond timestamps and decodes legacy whole-second ISO8601")
+    func snapshotCoderSubsecondAndLegacy() throws {
+        let subsecondDate = Date(timeIntervalSince1970: 1_795_600_000.654)
+        let snapshot = OTPVaultSnapshot(
+            folders: [OTPFolder(name: "Sec", sortOrder: 0, updatedAt: subsecondDate)],
+            accounts: [OTPAccount(issuer: "GitHub", label: "a", secret: Data("s".utf8), type: .hotp, counter: 3, createdAt: subsecondDate, updatedAt: subsecondDate, counterResetAt: subsecondDate)],
+            updatedAt: subsecondDate
+        )
+        let encoded = try VaultSnapshotCoder.encode(snapshot)
+        let decoded = try VaultSnapshotCoder.decode(from: encoded)
+        #expect(abs((decoded.accounts[0].counterResetAt?.timeIntervalSince1970 ?? 0) - 1_795_600_000.654) < 0.002)
+
+        // Legacy whole-second JSON without fractional seconds or tombstoneHorizon
+        let legacyJSON = Data("""
+        {
+          "schemaVersion": 1,
+          "folders": [],
+          "accounts": [
+            {
+              "id": "\(UUID().uuidString)",
+              "issuer": "Legacy",
+              "label": "u",
+              "secret": "\(Data("12345".utf8).base64EncodedString())",
+              "updatedAt": "2026-11-25T09:46:40Z"
+            }
+          ],
+          "updatedAt": "2026-11-25T09:46:40Z"
+        }
+        """.utf8)
+        let legacyDecoded = try VaultSnapshotCoder.decode(from: legacyJSON)
+        #expect(legacyDecoded.accounts.count == 1)
+        #expect(legacyDecoded.tombstoneHorizon == nil)
+    }
+
+    @Test("Merge handles HOTP secret rotation coherently, ties deterministically, and prevents post-cap resurrection")
+    func mergeCoherentResetDeterministicTiesAndHorizon() throws {
+        let id = UUID()
+        let folderID = UUID()
+        let t1 = Date(timeIntervalSince1970: 1_700_000_000.100)
+        let t2 = Date(timeIntervalSince1970: 1_700_000_000.900) // subsecond later in same second
+
+        // Offline increment vs secret rotation: secret & counter stay coupled
+        let oldSecret = Data([1, 1, 1])
+        let newSecret = Data([2, 2, 2])
+        let offlineIncrement = OTPAccount(
+            id: id,
+            issuer: "NAS",
+            label: "ops-renamed",
+            secret: oldSecret,
+            type: .hotp,
+            counter: 42,
+            createdAt: t1,
+            updatedAt: t2,
+            counterResetAt: nil
+        )
+        let rotated = OTPAccount(
+            id: id,
+            issuer: "NAS",
+            label: "ops",
+            secret: newSecret,
+            type: .hotp,
+            counter: 0,
+            createdAt: t1,
+            updatedAt: t1.addingTimeInterval(0.3),
+            counterResetAt: t1.addingTimeInterval(0.3)
+        )
+        let incSnap = OTPVaultSnapshot(accounts: [offlineIncrement], updatedAt: t2)
+        let rotSnap = OTPVaultSnapshot(accounts: [rotated], updatedAt: t1.addingTimeInterval(0.3))
+
+        let ab = incSnap.merged(with: rotSnap)
+        let ba = rotSnap.merged(with: incSnap)
+        #expect(ab.accounts[0] == ba.accounts[0])
+        #expect(ab.accounts[0].secret == newSecret)
+        #expect(ab.accounts[0].counter == 0)
+        #expect(ab.accounts[0].label == "ops-renamed")
+
+        // Deterministic tie-break on identical encoded timestamp
+        let sameTime = Date(timeIntervalSince1970: 1_700_000_050)
+        let tieFolderA = OTPFolder(id: folderID, name: "Alpha", sortOrder: 0, updatedAt: sameTime)
+        let tieFolderB = OTPFolder(id: folderID, name: "Zeta", sortOrder: 0, updatedAt: sameTime)
+        let snapA = OTPVaultSnapshot(folders: [tieFolderA], updatedAt: sameTime)
+        let snapB = OTPVaultSnapshot(folders: [tieFolderB], updatedAt: sameTime)
+        let m1 = try VaultSnapshotCoder.decode(from: VaultSnapshotCoder.encode(snapA.merged(with: snapB)))
+        let m2 = try VaultSnapshotCoder.decode(from: VaultSnapshotCoder.encode(snapB.merged(with: snapA)))
+        #expect(m1.folders == m2.folders)
+
+        // > cap deletions advance tombstoneHorizon and prevent old replica resurrection
+        let oldAccID = UUID()
+        let oldAcc = OTPAccount(id: oldAccID, issuer: "Old", label: "stale", secret: Data("abc".utf8), createdAt: t1, updatedAt: t1)
+        let staleDevice = OTPVaultSnapshot(accounts: [oldAcc], updatedAt: t1)
+        let tombstones = (0..<5).map { idx in
+            OTPTombstone(id: idx == 0 ? oldAccID : UUID(), deletedAt: t1.addingTimeInterval(TimeInterval(idx + 1)))
+        }
+        let pruningDevice = OTPVaultSnapshot(
+            accounts: [],
+            updatedAt: t1.addingTimeInterval(10),
+            accountTombstones: tombstones
+        ).merged(with: OTPVaultSnapshot(), tombstoneLimit: 3)
+        #expect(pruningDevice.accountTombstones.count == 3)
+        #expect(pruningDevice.tombstoneHorizon != nil)
+
+        let mergedAfterPrune = pruningDevice.merged(with: staleDevice, tombstoneLimit: 3)
+        #expect(!mergedAfterPrune.accounts.contains(where: { $0.id == oldAccID }))
+    }
 }

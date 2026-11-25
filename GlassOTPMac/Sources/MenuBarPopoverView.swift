@@ -546,7 +546,8 @@ struct MenuBarPopoverView: View {
                     .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                     if let lastSync = vault.lastSyncDate {
-                        Text("Last synced \(lastSync.formatted(date: .omitted, time: .shortened)) • iCloud Keychain (\(vault.accounts.count) tokens)")
+                        let storeMode = vault.iCloudSyncEnabled ? "iCloud Keychain" : "Local Keychain"
+                        Text("Last synced \(lastSync.formatted(date: .omitted, time: .shortened)) • \(storeMode) (\(vault.accounts.count) tokens)")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
@@ -616,8 +617,9 @@ struct MenuBarPopoverView: View {
     }
 
     private func copyAndDismiss(_ account: OTPAccount) {
-        onDismiss(true)
-        vault.copyCode(for: account, fromDirectHotKey: false)
+        if vault.copyCode(for: account, fromDirectHotKey: false) {
+            onDismiss(true)
+        }
     }
 
     private func openBackupFilePanel() {

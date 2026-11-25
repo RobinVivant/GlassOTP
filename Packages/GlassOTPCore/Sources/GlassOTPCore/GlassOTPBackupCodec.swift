@@ -27,9 +27,7 @@ public enum GlassOTPBackupCodec {
             throw OTPImportError.corruptedArchive("Unsupported GlassOTP v2 key derivation parameters.")
         }
 
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let jsonData = try encoder.encode(snapshot)
+        let jsonData = try VaultSnapshotCoder.encode(snapshot)
 
         let n = 1 << Int(log2N)
         let r = Int(v2DefaultR)
@@ -111,10 +109,8 @@ public enum GlassOTPBackupCodec {
             throw OTPImportError.invalidFileFormat
         }
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
         do {
-            return try decoder.decode(OTPVaultSnapshot.self, from: plaintext)
+            return try VaultSnapshotCoder.decode(from: plaintext)
         } catch {
             throw OTPImportError.corruptedArchive("Unable to decode GlassOTP vault snapshot.")
         }
