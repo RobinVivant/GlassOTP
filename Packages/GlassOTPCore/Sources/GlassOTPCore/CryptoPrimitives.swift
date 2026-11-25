@@ -286,7 +286,7 @@ public enum CryptoPrimitives {
 
         let blockWordCount = 32 * r
         var blocks = [UInt32](repeating: 0, count: p * blockWordCount)
-        initialKeyMaterial.withUnsafeBytes { raw in
+        initialKeyMaterial.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             for idx in 0..<blocks.count {
                 let offset = idx * 4
                 let b0 = UInt32(raw[offset])
@@ -324,7 +324,7 @@ public enum CryptoPrimitives {
         }
 
         var derivedSalt = Data(count: initialBytes)
-        derivedSalt.withUnsafeMutableBytes { outRaw in
+        derivedSalt.withUnsafeMutableBytes { (outRaw: UnsafeMutableRawBufferPointer) in
             for idx in 0..<blocks.count {
                 let word = blocks[idx]
                 let offset = idx * 4
