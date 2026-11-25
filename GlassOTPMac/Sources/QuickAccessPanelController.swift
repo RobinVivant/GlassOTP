@@ -74,7 +74,11 @@ final class QuickAccessPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        guard !suppressNextResignDismiss else { return }
+        guard !suppressNextResignDismiss,
+              panel?.attachedSheet == nil,
+              NSApp.modalWindow == nil else {
+            return
+        }
         dismiss(restorePreviousApp: false)
     }
 

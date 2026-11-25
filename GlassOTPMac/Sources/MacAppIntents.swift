@@ -58,28 +58,35 @@ struct CopyMacOTPIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
         let now = Date()
-        guard let existingSnapshot = try? KeychainVaultStore.shared.loadSnapshot(),
-              let existing = existingSnapshot.accounts.first(where: { $0.id == account.id }) else {
+        var target: OTPAccount?
+
+        let updatedSnapshot = try KeychainVaultStore.shared.mutateSnapshotIfPresent { snapshot in
+            guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }) else {
+                return false
+            }
+            let current = snapshot.accounts[idx]
+            target = current
+            guard current.isSupportedAlgorithm, current.type == .hotp else {
+                return false
+            }
+            snapshot.accounts[idx].counter &+= 1
+            snapshot.accounts[idx].updatedAt = now
+            return true
+        }
+
+        guard updatedSnapshot != nil,
+              let resolvedTarget = target,
+              resolvedTarget.isSupportedAlgorithm else {
             return .result(value: "")
         }
 
-        var target = existing
-        if existing.type == .hotp {
-            _ = try KeychainVaultStore.shared.mutateSnapshot { snapshot in
-                guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }) else { return }
-                target = snapshot.accounts[idx]
-                snapshot.accounts[idx].counter &+= 1
-                snapshot.accounts[idx].updatedAt = now
-            }
-        }
-
-        let codeSnapshot = OTPGenerator.snapshot(for: target, at: now, includeNextCode: false)
+        let codeSnapshot = OTPGenerator.snapshot(for: resolvedTarget, at: now, includeNextCode: false)
         await MainActor.run {
             MacClipboardWriter.copyOTP(codeSnapshot.code)
             CopyHUDController.shared.show(
-                account: target,
+                account: resolvedTarget,
                 formattedCode: codeSnapshot.formattedCode,
-                remainingSeconds: target.type == .totp ? max(0, Int(ceil(codeSnapshot.remainingSeconds))) : nil,
+                remainingSeconds: resolvedTarget.type == .totp ? max(0, Int(ceil(codeSnapshot.remainingSeconds))) : nil,
                 didAutoType: false
             )
         }

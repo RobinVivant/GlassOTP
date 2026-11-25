@@ -6,7 +6,7 @@ Contributions are welcome for bug fixes, new OTP import formats, brand logo mapp
 
 ### Prerequisites
 
-- macOS 26+ with Xcode 26+ (tested with Xcode 27.2)
+- macOS 26+ with Xcode 27.2+ (tested with Xcode 27.2)
 - Swift 6.2+ toolchain (bundled with Xcode)
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`) if you modify `project.yml`
 - An Apple Developer Team ID if building for physical iOS devices or signed macOS/iCloud Keychain sync

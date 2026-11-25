@@ -213,7 +213,11 @@ private struct PinnedOTPLiveRingView: View {
     let account: OTPAccount
 
     var body: some View {
-        if account.type == .totp {
+        if !account.isSupportedAlgorithm {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.subheadline)
+                .foregroundStyle(.orange)
+        } else if account.type == .totp {
             let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
             CountdownRingView(
                 remainingSeconds: timing.remainingSeconds,
@@ -239,7 +243,10 @@ private struct OTPLiveCodeText: View {
         let isExpiring: Bool
         let displayedText: String
 
-        if account.type == .totp {
+        if !account.isSupportedAlgorithm {
+            isExpiring = false
+            displayedText = isVisible ? "Unsupported" : "••• •••"
+        } else if account.type == .totp {
             let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
             isExpiring = timing.remainingSeconds <= 5
             if isVisible {
@@ -286,7 +293,18 @@ private struct OTPLiveRightCluster: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if account.type == .totp {
+            if !account.isSupportedAlgorithm {
+                codeStack(
+                    codeText: isVisible ? "Unsupported" : "••• •••",
+                    nextCodeText: nil,
+                    isExpiring: false
+                )
+
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 30, height: 30)
+            } else if account.type == .totp {
                 let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
                 let isExpiring = timing.remainingSeconds <= 5
 
@@ -375,7 +393,8 @@ private struct OTPExpiringBorderOverlay: View {
     let cornerRadius: CGFloat
 
     var body: some View {
-        let isExpiring = account.type == .totp
+        let isExpiring = account.isSupportedAlgorithm
+            && account.type == .totp
             && OTPGenerator.totpTiming(period: account.period, at: clock.now).remainingSeconds <= 5
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .strokeBorder(

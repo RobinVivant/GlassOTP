@@ -48,6 +48,19 @@ struct SettingsView: View {
         )
     }
 
+    private var biometricLockBinding: Binding<Bool> {
+        Binding(
+            get: { security.biometricLockEnabled },
+            set: { newValue in
+                if newValue && !security.canEvaluateDeviceAuthentication() {
+                    vault.alertMessage = "Set a device passcode or enable \(security.biometryDisplayName) in iOS Settings before enabling app lock."
+                    return
+                }
+                security.biometricLockEnabled = newValue
+            }
+        )
+    }
+
     var body: some View {
         @Bindable var bindableVault = vault
         @Bindable var bindableSecurity = security
@@ -96,6 +109,11 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("iCloud Keychain Sync", isOn: iCloudSyncBinding)
+                    if SharedSecurityPreferences.hasPendingICloudCleanup && !vault.iCloudSyncEnabled {
+                        Button("Retry Deleting iCloud Copy", role: .destructive) {
+                            vault.retryPendingICloudCleanup()
+                        }
+                    }
                 } header: {
                     Text("Sync & Storage")
                 } footer: {
@@ -104,7 +122,7 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("Universal Clipboard (Copy Across Devices)", isOn: $bindableVault.universalClipboardEnabled)
-                    Toggle("Require \(security.biometryDisplayName) Lock", isOn: $bindableSecurity.biometricLockEnabled)
+                    Toggle("Require \(security.biometryDisplayName) Lock", isOn: biometricLockBinding)
 
                     if security.biometricLockEnabled {
                         Picker("Auto-Lock Delay", selection: $bindableSecurity.autoLockDelaySeconds) {
@@ -154,7 +172,13 @@ struct SettingsView: View {
         } message: {
             Text("Deleting the iCloud copy removes it from all devices signed into your Apple Account. Or keep the existing iCloud vault and switch only this device to local storage.")
         }
-        .sheet(isPresented: $showingExportPasswordPrompt) {
+        .sheet(isPresented: $showingExportPasswordPrompt, onDismiss: {
+            exportPassword = ""
+            exportConfirmPassword = ""
+            if exportDocument != nil {
+                showingFileExporter = true
+            }
+        }) {
             NavigationStack {
                 Form {
                     Section {
@@ -170,7 +194,10 @@ struct SettingsView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { showingExportPasswordPrompt = false }
+                        Button("Cancel") {
+                            exportDocument = nil
+                            showingExportPasswordPrompt = false
+                        }
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button {
@@ -185,7 +212,6 @@ struct SettingsView: View {
                                     isExportingBackup = false
                                     exportDocument = GlassOTPBackupDocument(data: encoded)
                                     showingExportPasswordPrompt = false
-                                    showingFileExporter = true
                                 } catch {
                                     isExportingBackup = false
                                     vault.alertMessage = error.localizedDescription
@@ -210,6 +236,9 @@ struct SettingsView: View {
             contentType: UTType("com.robinvivant.glassotp.backup") ?? .data,
             defaultFilename: "GlassOTP-Backup"
         ) { result in
+            exportDocument = nil
+            exportPassword = ""
+            exportConfirmPassword = ""
             if case .failure(let error) = result {
                 vault.alertMessage = error.localizedDescription
             }

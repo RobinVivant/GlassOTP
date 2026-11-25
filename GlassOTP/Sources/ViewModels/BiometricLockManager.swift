@@ -1,7 +1,9 @@
 import Foundation
+import GlassOTPCore
 import LocalAuthentication
 import Observation
 import SwiftUI
+import WidgetKit
 
 @MainActor
 @Observable
@@ -13,9 +15,12 @@ final class BiometricLockManager {
     var biometricLockEnabled: Bool {
         didSet {
             UserDefaults.standard.set(biometricLockEnabled, forKey: Self.lockEnabledKey)
+            SharedSecurityPreferences.isAppLockEnabled = biometricLockEnabled
             if !biometricLockEnabled {
                 isLocked = false
+                backgroundedAt = nil
             }
+            WidgetCenter.shared.reloadAllTimelines()
         }
     }
 
@@ -44,10 +49,12 @@ final class BiometricLockManager {
         if defaults.object(forKey: Self.autoLockDelayKey) == nil {
             defaults.set(30, forKey: Self.autoLockDelayKey)
         }
-        self.biometricLockEnabled = defaults.bool(forKey: Self.lockEnabledKey)
+        let lockEnabled = defaults.bool(forKey: Self.lockEnabledKey)
+        self.biometricLockEnabled = lockEnabled
         self.appSwitcherBlurEnabled = defaults.bool(forKey: Self.blurEnabledKey)
         self.autoLockDelaySeconds = defaults.integer(forKey: Self.autoLockDelayKey)
-        if biometricLockEnabled {
+        SharedSecurityPreferences.isAppLockEnabled = lockEnabled
+        if lockEnabled {
             isLocked = true
         }
     }
@@ -105,9 +112,10 @@ final class BiometricLockManager {
     func authenticate() async {
         guard biometricLockEnabled else {
             isLocked = false
+            backgroundedAt = nil
             return
         }
-        guard !isAuthenticating else { return }
+        guard isLocked, !isAuthenticating else { return }
         let context = LAContext()
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
@@ -127,6 +135,8 @@ final class BiometricLockManager {
                 localizedReason: "Unlock your GlassOTP authenticator vault"
             )
             if success {
+                backgroundedAt = nil
+                authErrorMessage = nil
                 withAnimation(.easeOut(duration: 0.2)) {
                     isLocked = false
                 }
@@ -141,18 +151,14 @@ final class BiometricLockManager {
     func handleScenePhaseChange(_ phase: ScenePhase) {
         switch phase {
         case .inactive:
-            guard biometricLockEnabled else { return }
-            if backgroundedAt == nil {
-                backgroundedAt = Date()
-            }
-            if autoLockDelaySeconds == 0 {
+            guard biometricLockEnabled, !isAuthenticating else { return }
+            if let backgroundedAt,
+               Date().timeIntervalSince(backgroundedAt) >= TimeInterval(autoLockDelaySeconds) {
                 isLocked = true
             }
         case .background:
             guard biometricLockEnabled else { return }
-            if backgroundedAt == nil {
-                backgroundedAt = Date()
-            }
+            backgroundedAt = Date()
             if autoLockDelaySeconds == 0 {
                 isLocked = true
             }
@@ -162,14 +168,14 @@ final class BiometricLockManager {
                 backgroundedAt = nil
                 return
             }
-            if let backgroundedAt {
+            if !isAuthenticating, let backgroundedAt {
                 let elapsed = Date().timeIntervalSince(backgroundedAt)
                 if elapsed >= TimeInterval(autoLockDelaySeconds) {
                     isLocked = true
                 }
                 self.backgroundedAt = nil
             }
-            if isLocked {
+            if isLocked && !isAuthenticating {
                 Task { await authenticate() }
             }
         @unknown default:

@@ -18,6 +18,7 @@ struct MenuBarPopoverView: View {
     @State private var importPassword = ""
     @State private var showingPasswordPrompt = false
     @State private var isReadingImport = false
+    @State private var isImporting = false
 
     var body: some View {
         let displayed = vault.displayedAccounts
@@ -523,10 +524,11 @@ struct MenuBarPopoverView: View {
                         .foregroundStyle(.secondary)
 
                     HStack(spacing: 8) {
-                        Button("Import Backup…") {
+                        Button(isReadingImport ? "Reading…" : "Import Backup…") {
                             openBackupFilePanel()
                         }
                         .font(.caption.weight(.medium))
+                        .disabled(isReadingImport || isImporting)
 
                         Spacer()
 
@@ -564,7 +566,9 @@ struct MenuBarPopoverView: View {
 
             SecureField("Backup password", text: $importPassword)
                 .textFieldStyle(.roundedBorder)
+                .disabled(isImporting)
                 .onSubmit {
+                    guard !isImporting, !importPassword.isEmpty else { return }
                     runBackupImport(data: data, password: importPassword, filename: filename)
                 }
 
@@ -582,12 +586,23 @@ struct MenuBarPopoverView: View {
                     importPassword = ""
                     importError = nil
                 }
+                .disabled(isImporting)
                 Spacer()
-                Button("Import") {
+                Button {
                     runBackupImport(data: data, password: importPassword, filename: filename)
+                } label: {
+                    if isImporting {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Decrypting…")
+                        }
+                    } else {
+                        Text("Import")
+                    }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(importPassword.isEmpty)
+                .disabled(importPassword.isEmpty || isImporting)
             }
             Spacer()
         }
@@ -667,7 +682,10 @@ struct MenuBarPopoverView: View {
     }
 
     private func runBackupImport(data: Data, password: String?, filename: String) {
+        guard !isImporting else { return }
+        isImporting = true
         Task {
+            defer { isImporting = false }
             let outcome = await vault.importBackupFile(data: data, password: password, filename: filename)
             switch outcome {
             case .success(let summary):
@@ -830,7 +848,17 @@ private struct MacLiveRightCluster: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            if account.type == .totp {
+            if !account.isSupportedAlgorithm {
+                Text("Unsupported")
+                    .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .frame(minHeight: 30, alignment: .trailing)
+
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(width: 24, height: 24)
+            } else if account.type == .totp {
                 let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
                 let isExpiring = timing.remainingSeconds <= 5
                 let code = OTPGenerator.formatCode(

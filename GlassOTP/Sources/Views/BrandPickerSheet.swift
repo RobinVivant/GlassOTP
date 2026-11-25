@@ -114,6 +114,10 @@ struct BrandPickerSheet: View {
                 .disabled(BrandCatalog.cleanedDomain(customDomain) == nil || isFetchingDomain)
             }
 
+            Text("Downloads the site icon via Google Favicons (www.google.com).")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
             if let domainError {
                 Text(domainError)
                     .font(.caption)

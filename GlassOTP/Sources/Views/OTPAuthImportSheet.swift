@@ -193,6 +193,8 @@ struct OTPAuthImportSheet: View {
                     Spacer()
 
                     Button("Change") {
+                        activeTask?.cancel()
+                        isDecrypting = false
                         selectedFile = nil
                         detectedEncryptedFormat = nil
                         password = ""
@@ -200,6 +202,7 @@ struct OTPAuthImportSheet: View {
                     }
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.glass)
+                    .disabled(isDecrypting)
                 }
 
                 SecureField("Backup Password", text: $password)
@@ -297,10 +300,13 @@ struct OTPAuthImportSheet: View {
                 }
 
                 Button {
+                    let preserveEmpty = decryptedFormat == "GlassOTP Encrypted Backup"
+                        && selectedAccounts.count == decryptedAccounts.count
                     let summary = vault.importAccounts(
                         selectedAccounts,
                         folders: decryptedFolders,
-                        skipDuplicates: skipDuplicates
+                        skipDuplicates: skipDuplicates,
+                        preserveEmptyFolders: preserveEmpty
                     )
                     guard summary.saved else {
                         errorMessage = vault.alertMessage ?? "Couldn't save imported accounts to Keychain."

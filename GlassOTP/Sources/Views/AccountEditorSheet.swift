@@ -179,6 +179,14 @@ struct AccountEditorSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         guard let secret = decodedSecret else { return }
+                        let resolvedResetAt: Date?
+                        if let existingAccount {
+                            let secretChanged = existingAccount.secret != secret
+                            let counterChanged = (type == .hotp && existingAccount.counter != counter)
+                            resolvedResetAt = (secretChanged || counterChanged) ? Date() : existingAccount.counterResetAt
+                        } else {
+                            resolvedResetAt = nil
+                        }
                         let updated = OTPAccount(
                             id: existingAccount?.id ?? UUID(),
                             issuer: issuer,
@@ -194,6 +202,7 @@ struct AccountEditorSheet: View {
                             sortOrder: existingAccount?.sortOrder ?? vault.accounts.count,
                             createdAt: existingAccount?.createdAt ?? Date(),
                             updatedAt: Date(),
+                            counterResetAt: resolvedResetAt,
                             customBrandSlug: existingAccount?.customBrandSlug,
                             customLogoDomain: existingAccount?.customLogoDomain
                         )

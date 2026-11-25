@@ -7,6 +7,7 @@ import UIKit
 
 struct QRScannerSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     let onParsed: ([OTPAccount]) -> Void
 
     @State private var selectedPhotoItem: PhotosPickerItem?
@@ -26,8 +27,10 @@ struct QRScannerSheet: View {
                         noCameraFallback
                     } else if cameraAuthStatus == .denied || cameraAuthStatus == .restricted {
                         cameraPermissionDeniedView
-                    } else {
+                    } else if cameraAuthStatus == .authorized {
                         cameraViewfinder
+                    } else {
+                        cameraRequestingView
                     }
 
                     if let errorMessage {
@@ -72,7 +75,7 @@ struct QRScannerSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
-                if hasCamera {
+                if hasCamera && cameraAuthStatus == .authorized && (AVCaptureDevice.default(for: .video)?.hasTorch ?? false) {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             torchOn.toggle()
@@ -82,11 +85,40 @@ struct QRScannerSheet: View {
                     }
                 }
             }
+            .task {
+                hasCamera = AVCaptureDevice.default(for: .video) != nil
+                guard hasCamera else { return }
+                let status = AVCaptureDevice.authorizationStatus(for: .video)
+                if status == .notDetermined {
+                    let granted = await AVCaptureDevice.requestAccess(for: .video)
+                    cameraAuthStatus = granted ? .authorized : .denied
+                } else {
+                    cameraAuthStatus = status
+                }
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    hasCamera = AVCaptureDevice.default(for: .video) != nil
+                    cameraAuthStatus = AVCaptureDevice.authorizationStatus(for: .video)
+                }
+            }
             .onChange(of: selectedPhotoItem) { _, newItem in
                 guard let newItem else { return }
                 Task { await decodePhoto(newItem) }
             }
         }
+    }
+
+    private var cameraRequestingView: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            Text("Preparing Camera…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding(28)
+        .frame(maxWidth: .infinity, minHeight: 280)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     private var cameraViewfinder: some View {
@@ -182,20 +214,26 @@ struct QRScannerSheet: View {
 
     private func decodePhoto(_ item: PhotosPickerItem) async {
         do {
-            guard let data = try await item.loadTransferable(type: Data.self),
-                  let uiImage = UIImage(data: data),
-                  let ciImage = CIImage(image: uiImage) else {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
                 errorMessage = "Unable to load selected image."
                 return
             }
 
-            let detector = CIDetector(
-                ofType: CIDetectorTypeQRCode,
-                context: nil,
-                options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
-            )
-            let features = detector?.features(in: ciImage) as? [CIQRCodeFeature] ?? []
-            guard let payload = features.compactMap(\.messageString).first else {
+            let payload: String? = await Task.detached(priority: .userInitiated) {
+                guard let uiImage = UIImage(data: data),
+                      let ciImage = CIImage(image: uiImage) else {
+                    return nil
+                }
+                let detector = CIDetector(
+                    ofType: CIDetectorTypeQRCode,
+                    context: nil,
+                    options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
+                )
+                let features = detector?.features(in: ciImage) as? [CIQRCodeFeature] ?? []
+                return features.compactMap(\.messageString).first
+            }.value
+
+            guard let payload else {
                 errorMessage = "No QR code found in the selected photo."
                 return
             }
@@ -208,6 +246,7 @@ struct QRScannerSheet: View {
 
 private final class CaptureSessionBox: @unchecked Sendable {
     let session = AVCaptureSession()
+    var isConfigured = false
 }
 
 private struct QRCameraPreview: UIViewControllerRepresentable {
@@ -271,6 +310,16 @@ private final class CameraScannerController: UIViewController, AVCaptureMetadata
         previewLayer?.frame = view.bounds
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        let box = sessionBox
+        sessionQueue.async {
+            if box.isConfigured && !box.session.isRunning {
+                box.session.startRunning()
+            }
+        }
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         let box = sessionBox
@@ -312,6 +361,7 @@ private final class CameraScannerController: UIViewController, AVCaptureMetadata
                 output.metadataObjectTypes = [.qr]
             }
             box.session.commitConfiguration()
+            box.isConfigured = true
             box.session.startRunning()
         }
     }

@@ -478,4 +478,48 @@ struct VaultImporterTests {
             try VaultImporter.importFile(data: oversized)
         }
     }
+
+    @Test("GlassOTP backup import skips MD5/empty entries and importer normalizes algorithms")
+    func glassOTPBackupMD5FilterAndAlgorithmNormalization() throws {
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let md5Account = OTPAccount(
+            issuer: "OldMD5",
+            label: "md5",
+            secret: Data("12345".utf8),
+            algorithm: .md5,
+            createdAt: fixedDate,
+            updatedAt: fixedDate
+        )
+        let validAccount = OTPAccount(
+            issuer: "GitHub",
+            label: "valid",
+            secret: Data("JBSWY3DPEHPK3PXP".utf8),
+            algorithm: .sha256,
+            createdAt: fixedDate,
+            updatedAt: fixedDate
+        )
+        let snapshot = OTPVaultSnapshot(accounts: [md5Account, validAccount], updatedAt: fixedDate)
+        let backupData = try GlassOTPBackupCodec.encode(snapshot: snapshot, password: "strong-password-1", log2N: 12)
+        let imported = try VaultImporter.importFile(data: backupData, password: "strong-password-1", filenameHint: "test.glassotp")
+        #expect(imported.accounts.count == 1)
+        #expect(imported.accounts[0].issuer == "GitHub")
+        #expect(imported.skippedEntries == 1)
+
+        let aegisNormalized = Data("""
+        {
+          "version": 1,
+          "header": { "slots": null, "params": null },
+          "db": {
+            "entries": [
+              { "type": "totp", "issuer": "HyphenSHA", "name": "a", "info": { "secret": "JBSWY3DPEHPK3PXP", "algo": "HMAC-SHA512", "digits": 6, "period": 30 } },
+              { "type": "totp", "issuer": "UnknownAlgo", "name": "b", "info": { "secret": "JBSWY3DPEHPK3PXP", "algo": "BLAKE2B", "digits": 6, "period": 30 } }
+            ]
+          }
+        }
+        """.utf8)
+        let res = try VaultImporter.importFile(data: aegisNormalized)
+        #expect(res.accounts.count == 1)
+        #expect(res.accounts[0].algorithm == .sha512)
+        #expect(res.skippedEntries == 1)
+    }
 }

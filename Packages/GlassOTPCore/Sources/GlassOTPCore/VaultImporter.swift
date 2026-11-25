@@ -102,10 +102,23 @@ public enum VaultImporter {
         case .glassOTP:
             let pwd = try requirePassword(password, format: "GlassOTP Encrypted Backup")
             let snapshot = try GlassOTPBackupCodec.decode(data: data, password: pwd)
+            var supportedAccounts: [OTPAccount] = []
+            var skippedEntries = 0
+            for account in snapshot.accounts {
+                guard !account.secret.isEmpty, account.isSupportedAlgorithm else {
+                    skippedEntries += 1
+                    continue
+                }
+                supportedAccounts.append(account)
+            }
+            guard !supportedAccounts.isEmpty || snapshot.accounts.isEmpty else {
+                throw OTPImportError.corruptedArchive("No supported TOTP/HOTP accounts were found in this GlassOTP backup.")
+            }
             return OTPAuthImportResult(
                 formatDescription: "GlassOTP Encrypted Backup",
                 folders: snapshot.folders,
-                accounts: snapshot.accounts
+                accounts: supportedAccounts,
+                skippedEntries: skippedEntries
             )
 
         case .authProV2:
@@ -1370,15 +1383,21 @@ public enum VaultImporter {
     }
 
     private static func parseAlgorithm(_ raw: String?) -> OTPAlgorithm? {
-        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        guard let trimmed = trimmedNonEmpty(raw) else {
+            return .sha1
+        }
+        let normalized = trimmed.lowercased()
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+        switch normalized {
+        case "sha1", "hmacsha1":
+            return .sha1
         case "sha256", "hmacsha256":
             return .sha256
         case "sha512", "hmacsha512":
             return .sha512
-        case "md5", "hmacmd5", "hmac-md5":
-            return nil
         default:
-            return .sha1
+            return nil
         }
     }
 

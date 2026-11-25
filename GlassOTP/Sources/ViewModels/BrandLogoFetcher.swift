@@ -14,6 +14,10 @@ private final class LogoRedirectDelegate: NSObject, URLSessionTaskDelegate {
         "t3.gstatic.com",
     ]
 
+    private let lock = NSLock()
+    private var redirectCounts: [Int: Int] = [:]
+    private static let maxRedirects = 3
+
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -21,21 +25,35 @@ private final class LogoRedirectDelegate: NSObject, URLSessionTaskDelegate {
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
-        guard let url = request.url,
+        let hopAllowed = lock.withLock {
+            let count = redirectCounts[task.taskIdentifier, default: 0] + 1
+            redirectCounts[task.taskIdentifier] = count
+            return count <= Self.maxRedirects
+        }
+        guard hopAllowed,
+              let url = request.url,
               url.scheme?.lowercased() == "https",
+              url.port == nil || url.port == 443,
+              url.user == nil,
+              url.password == nil,
               let host = url.host?.lowercased(),
-              Self.isAllowedRedirectHost(host) else {
+              Self.isAllowedGoogleHost(host) else {
             completionHandler(nil)
             return
         }
         completionHandler(request)
     }
 
-    private static func isAllowedRedirectHost(_ host: String) -> Bool {
-        if allowedGoogleHosts.contains(host) || host.hasSuffix(".gstatic.com") || host.hasSuffix(".googleusercontent.com") {
-            return true
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.withLock {
+            redirectCounts.removeValue(forKey: task.taskIdentifier)
         }
-        return BrandCatalog.cleanedDomain(host) != nil
+    }
+
+    private static func isAllowedGoogleHost(_ host: String) -> Bool {
+        allowedGoogleHosts.contains(host)
+            || host.hasSuffix(".gstatic.com")
+            || host.hasSuffix(".googleusercontent.com")
     }
 }
 
@@ -99,11 +117,6 @@ enum BrandLogoFetcher {
     static func fetchLogo(forDomain rawDomain: String) async -> Bool {
         guard let domain = BrandCatalog.cleanedDomain(rawDomain) else { return false }
 
-        var directComponents = URLComponents()
-        directComponents.scheme = "https"
-        directComponents.host = domain
-        directComponents.path = "/apple-touch-icon.png"
-
         var googleComponents = URLComponents()
         googleComponents.scheme = "https"
         googleComponents.host = "www.google.com"
@@ -113,30 +126,35 @@ enum BrandLogoFetcher {
             URLQueryItem(name: "sz", value: "128"),
         ]
 
-        let candidates: [URL?] = [
-            directComponents.url,
-            googleComponents.url,
-        ]
-
-        for candidate in candidates {
-            guard let url = candidate else { continue }
-            do {
-                let (data, response) = try await session.data(from: url)
-                guard let http = response as? HTTPURLResponse,
-                      (200...299).contains(http.statusCode),
-                      http.expectedContentLength <= Int64(maxDownloadBytes),
-                      !data.isEmpty,
-                      data.count <= maxDownloadBytes,
-                      let pngData = validatedDownsampledPNG(from: data) else {
-                    continue
-                }
-                BrandLogoCache.savePNGData(pngData, forDomain: domain)
-                return true
-            } catch {
-                continue
+        guard let url = googleComponents.url else { return false }
+        do {
+            let (bytes, response) = try await session.bytes(from: url)
+            guard let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode),
+                  http.expectedContentLength <= Int64(maxDownloadBytes) else {
+                return false
             }
+
+            var data = Data()
+            if http.expectedContentLength > 0 {
+                data.reserveCapacity(Int(http.expectedContentLength))
+            }
+            for try await byte in bytes {
+                if data.count >= maxDownloadBytes {
+                    return false
+                }
+                data.append(byte)
+            }
+
+            guard !data.isEmpty,
+                  let pngData = validatedDownsampledPNG(from: data) else {
+                return false
+            }
+            BrandLogoCache.savePNGData(pngData, forDomain: domain)
+            return true
+        } catch {
+            return false
         }
-        return false
     }
 
     private static func validatedDownsampledPNG(from data: Data) -> Data? {

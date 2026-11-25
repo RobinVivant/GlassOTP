@@ -134,25 +134,30 @@ final class VaultViewModel {
         accounts.filter { $0.folderID == folderID }.count
     }
 
+    private func applySnapshotToMemory(_ snapshot: OTPVaultSnapshot) {
+        folders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
+        accounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
+        accountTombstones = snapshot.accountTombstones
+        folderTombstones = snapshot.folderTombstones
+        if let selectedFolderID, !folders.contains(where: { $0.id == selectedFolderID }) {
+            self.selectedFolderID = nil
+        }
+        hasLoadError = false
+    }
+
     func reloadFromStore() {
         do {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
             if let snapshot = try store.loadSnapshot() {
-                folders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
-                accounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
-                accountTombstones = snapshot.accountTombstones
-                folderTombstones = snapshot.folderTombstones
-                if let selectedFolderID, !folders.contains(where: { $0.id == selectedFolderID }) {
-                    self.selectedFolderID = nil
-                }
+                applySnapshotToMemory(snapshot)
             } else {
                 folders = []
                 accounts = []
                 accountTombstones = []
                 folderTombstones = []
                 selectedFolderID = nil
+                hasLoadError = false
             }
-            hasLoadError = false
         } catch {
             hasLoadError = true
             alertMessage = error.localizedDescription
@@ -164,15 +169,21 @@ final class VaultViewModel {
             let migrated = try store.setICloudSyncEnabled(enabled, removeOppositeBucket: removeFromICloud)
             iCloudSyncEnabled = store.isICloudSyncEnabled()
             if let migrated {
-                folders = migrated.folders.sorted { $0.sortOrder < $1.sortOrder }
-                accounts = migrated.accounts.sorted { $0.sortOrder < $1.sortOrder }
-                accountTombstones = migrated.accountTombstones
-                folderTombstones = migrated.folderTombstones
+                applySnapshotToMemory(migrated)
             }
             hasLoadError = false
             WidgetCenter.shared.reloadAllTimelines()
         } catch {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func retryPendingICloudCleanup() {
+        do {
+            try store.retryPendingICloudCleanup()
+            alertMessage = "Deleted the leftover iCloud Keychain copy."
+        } catch {
             alertMessage = error.localizedDescription
         }
     }
@@ -193,10 +204,7 @@ final class VaultViewModel {
         )
         do {
             let merged = try store.saveMergedSnapshot(snapshot)
-            folders = merged.folders.sorted { $0.sortOrder < $1.sortOrder }
-            accounts = merged.accounts.sorted { $0.sortOrder < $1.sortOrder }
-            accountTombstones = merged.accountTombstones
-            folderTombstones = merged.folderTombstones
+            applySnapshotToMemory(merged)
             WidgetCenter.shared.reloadAllTimelines()
             return true
         } catch {
@@ -215,6 +223,10 @@ final class VaultViewModel {
     }
 
     func copyCode(for account: OTPAccount, at date: Date = Date(), reloadWidgets: Bool = false) {
+        guard account.isSupportedAlgorithm else {
+            alertMessage = "\(account.displayTitle) uses legacy \(account.algorithm.displayName), which GlassOTP no longer generates."
+            return
+        }
         let snapshot = OTPGenerator.snapshot(for: account, at: date)
         OTPClipboardWriter.copyOTP(snapshot.code)
 
@@ -234,11 +246,36 @@ final class VaultViewModel {
     }
 
     func incrementHOTP(for account: OTPAccount) {
-        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
-        accounts[index].counter &+= 1
-        accounts[index].updatedAt = Date()
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        persist()
+        guard account.isSupportedAlgorithm else {
+            alertMessage = "\(account.displayTitle) uses legacy \(account.algorithm.displayName), which GlassOTP no longer generates."
+            return
+        }
+        guard !hasLoadError else {
+            alertMessage = "Cannot save changes because the existing Keychain vault could not be loaded."
+            return
+        }
+        let now = Date()
+        var found = false
+        do {
+            if let updated = try store.mutateSnapshotIfPresent({ snapshot in
+                guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }),
+                      snapshot.accounts[idx].isSupportedAlgorithm else {
+                    return false
+                }
+                found = true
+                snapshot.accounts[idx].counter &+= 1
+                snapshot.accounts[idx].updatedAt = now
+                return true
+            }), found {
+                applySnapshotToMemory(updated)
+                WidgetCenter.shared.reloadAllTimelines()
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            } else {
+                reloadFromStore()
+            }
+        } catch {
+            alertMessage = error.localizedDescription
+        }
     }
 
     func toggleReveal(for accountID: UUID) {
@@ -254,18 +291,25 @@ final class VaultViewModel {
     }
 
     func togglePin(_ account: OTPAccount) {
+        let prevAccounts = accounts
         guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[index].isPinned.toggle()
         accounts[index].updatedAt = Date()
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        persist()
+        if persist() {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } else {
+            accounts = prevAccounts
+        }
     }
 
     func moveAccount(_ account: OTPAccount, to folderID: UUID?) {
+        let prevAccounts = accounts
         guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[index].folderID = folderID
         accounts[index].updatedAt = Date()
-        persist()
+        if !persist() {
+            accounts = prevAccounts
+        }
     }
 
     @discardableResult
@@ -304,15 +348,26 @@ final class VaultViewModel {
     }
 
     func updateBrandOverride(for account: OTPAccount, brandSlug: String?, customDomain: String?) {
+        let prevAccounts = accounts
         guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[index].customBrandSlug = brandSlug
         accounts[index].customLogoDomain = customDomain
         accounts[index].updatedAt = Date()
-        bumpLogoRevision()
-        persist()
+        if persist() {
+            bumpLogoRevision()
+        } else {
+            accounts = prevAccounts
+        }
     }
 
-    func applyCategorization(_ assignments: [UUID: OTPCategory], removeEmptyDefaultFolder: Bool) {
+    @discardableResult
+    func applyCategorization(_ assignments: [UUID: OTPCategory], removeEmptyDefaultFolder: Bool) -> Bool {
+        let prevFolders = folders
+        let prevAccounts = accounts
+        let prevTombstones = folderTombstones
+        let prevSelected = selectedFolderID
+        let prevDismissed = dismissedAutoCategorizeBanner
+
         let result = AccountCategorizer.apply(
             assignments: assignments,
             toAccounts: accounts,
@@ -330,7 +385,15 @@ final class VaultViewModel {
             selectedFolderID = nil
         }
         dismissedAutoCategorizeBanner = true
-        persist()
+        if !persist() {
+            folders = prevFolders
+            accounts = prevAccounts
+            folderTombstones = prevTombstones
+            selectedFolderID = prevSelected
+            dismissedAutoCategorizeBanner = prevDismissed
+            return false
+        }
+        return true
     }
 
     @discardableResult
@@ -347,32 +410,44 @@ final class VaultViewModel {
         logoCacheRevision &+= 1
     }
 
-    func addFolder(name: String, symbolName: String) {
+    @discardableResult
+    func addFolder(name: String, symbolName: String) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return false }
         if folders.contains(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
             alertMessage = "A folder named \"\(trimmed)\" already exists."
-            return
+            return false
         }
+        let prevFolders = folders
         let folder = OTPFolder(name: trimmed, symbolName: symbolName, sortOrder: folders.count)
         folders.append(folder)
-        persist()
+        if !persist() {
+            folders = prevFolders
+            return false
+        }
+        return true
     }
 
-    func renameFolder(_ folder: OTPFolder, to newName: String, symbolName: String) {
+    @discardableResult
+    func renameFolder(_ folder: OTPFolder, to newName: String, symbolName: String) -> Bool {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
-              let index = folders.firstIndex(where: { $0.id == folder.id }) else { return }
+              let index = folders.firstIndex(where: { $0.id == folder.id }) else { return false }
         if folders.contains(where: {
             $0.id != folder.id && $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
         }) {
             alertMessage = "A folder named \"\(trimmed)\" already exists."
-            return
+            return false
         }
+        let prevFolders = folders
         folders[index].name = trimmed
         folders[index].symbolName = symbolName
         folders[index].updatedAt = Date()
-        persist()
+        if !persist() {
+            folders = prevFolders
+            return false
+        }
+        return true
     }
 
     func deleteFolder(_ folder: OTPFolder) {
@@ -413,17 +488,22 @@ final class VaultViewModel {
     func importAccounts(
         _ incomingAccounts: [OTPAccount],
         folders incomingFolders: [OTPFolder],
-        skipDuplicates: Bool
+        skipDuplicates: Bool,
+        preserveEmptyFolders: Bool = false
     ) -> ImportSummary {
         let plan = VaultImportReconciler.reconcile(
             importedAccounts: incomingAccounts,
             importedFolders: incomingFolders,
             existingAccounts: accounts,
             existingFolders: folders,
-            skipDuplicates: skipDuplicates
+            existingAccountTombstones: accountTombstones,
+            existingFolderTombstones: folderTombstones,
+            skipDuplicates: skipDuplicates,
+            preserveEmptyFolders: preserveEmptyFolders
         )
 
-        guard plan.addedCount > 0 else {
+        let foldersChanged = plan.folders != folders
+        guard plan.addedCount > 0 || (preserveEmptyFolders && foldersChanged) else {
             return ImportSummary(addedCount: 0, skippedDuplicates: plan.skippedDuplicateCount, saved: true)
         }
 
@@ -478,6 +558,9 @@ final class VaultViewModel {
             let scoped = url.startAccessingSecurityScopedResource()
             defer {
                 if scoped { url.stopAccessingSecurityScopedResource() }
+                if url.standardizedFileURL.path.contains("/Documents/Inbox/") {
+                    try? FileManager.default.removeItem(at: url)
+                }
             }
             do {
                 let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey])
@@ -518,16 +601,48 @@ final class VaultViewModel {
            let idString = url.pathComponents.dropFirst().first,
            let accountID = UUID(uuidString: idString) {
             reloadFromStore()
-            if let match = accounts.first(where: { $0.id == accountID }) {
-                if let folderID = match.folderID {
-                    selectedFolderID = folderID
-                } else {
-                    selectedFolderID = nil
+            guard let match = accounts.first(where: { $0.id == accountID }) else {
+                return
+            }
+            guard match.isSupportedAlgorithm else {
+                alertMessage = "\(match.displayTitle) uses legacy \(match.algorithm.displayName), which GlassOTP no longer generates."
+                return
+            }
+            if match.type == .hotp {
+                guard !hasLoadError else {
+                    alertMessage = "Cannot advance HOTP counter because the existing Keychain vault could not be loaded."
+                    return
                 }
+                let now = Date()
+                var reservedAccount: OTPAccount?
+                do {
+                    if let updatedSnapshot = try store.mutateSnapshotIfPresent({ snapshot in
+                        guard let idx = snapshot.accounts.firstIndex(where: { $0.id == accountID }),
+                              snapshot.accounts[idx].isSupportedAlgorithm else {
+                            return false
+                        }
+                        reservedAccount = snapshot.accounts[idx]
+                        snapshot.accounts[idx].counter &+= 1
+                        snapshot.accounts[idx].updatedAt = now
+                        return true
+                    }) {
+                        applySnapshotToMemory(updatedSnapshot)
+                    } else {
+                        reloadFromStore()
+                    }
+                } catch {
+                    alertMessage = error.localizedDescription
+                    return
+                }
+                guard let verifiedAccount = reservedAccount else {
+                    reloadFromStore()
+                    return
+                }
+                selectedFolderID = verifiedAccount.folderID
+                copyCode(for: verifiedAccount, at: now, reloadWidgets: true)
+            } else {
+                selectedFolderID = match.folderID
                 copyCode(for: match, reloadWidgets: true)
-                if match.type == .hotp {
-                    incrementHOTP(for: match)
-                }
             }
         }
     }

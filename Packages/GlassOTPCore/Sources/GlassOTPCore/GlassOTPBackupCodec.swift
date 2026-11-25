@@ -1,12 +1,13 @@
 import Foundation
 
 public enum GlassOTPBackupCodec {
+    public static let minimumPasswordLength = 8
     private static let magicHeaderV1 = Data("GLOTP1".utf8)
     private static let magicHeaderV2 = Data("GLOTP2".utf8)
     private static let v2SaltLength = 16
     private static let v2NonceLength = 12
     private static let v2TagLength = 16
-    private static let v2DefaultLog2N: UInt8 = 14 // N = 16,384 (16 MiB scrypt)
+    internal static let v2DefaultLog2N: UInt8 = 16 // N = 65,536 (64 MiB scrypt)
     private static let v2DefaultR: UInt8 = 8
     private static let v2DefaultP: UInt8 = 1
 
@@ -15,11 +16,22 @@ public enum GlassOTPBackupCodec {
     }
 
     public static func encode(snapshot: OTPVaultSnapshot, password: String) throws -> Data {
+        try encode(snapshot: snapshot, password: password, log2N: v2DefaultLog2N)
+    }
+
+    internal static func encode(snapshot: OTPVaultSnapshot, password: String, log2N: UInt8) throws -> Data {
+        guard password.count >= minimumPasswordLength else {
+            throw OTPImportError.passwordTooShort(minimumPasswordLength)
+        }
+        guard log2N >= 10, log2N <= 20 else {
+            throw OTPImportError.corruptedArchive("Unsupported GlassOTP v2 key derivation parameters.")
+        }
+
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let jsonData = try encoder.encode(snapshot)
 
-        let n = 1 << Int(v2DefaultLog2N)
+        let n = 1 << Int(log2N)
         let r = Int(v2DefaultR)
         let p = Int(v2DefaultP)
         let salt = try CryptoPrimitives.randomBytes(count: v2SaltLength)
@@ -41,7 +53,7 @@ public enum GlassOTPBackupCodec {
         var output = Data()
         output.reserveCapacity(magicHeaderV2.count + 3 + v2SaltLength + v2NonceLength + v2TagLength + ciphertext.count)
         output.append(magicHeaderV2)
-        output.append(v2DefaultLog2N)
+        output.append(log2N)
         output.append(v2DefaultR)
         output.append(v2DefaultP)
         output.append(salt)

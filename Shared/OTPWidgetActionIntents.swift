@@ -50,24 +50,23 @@ struct CopyOTPWidgetIntent: AppIntent {
         let now = Date()
         var targetAccount: OTPAccount?
 
-        guard let existingSnapshot = try? KeychainVaultStore.shared.loadSnapshot(),
-              let existing = existingSnapshot.accounts.first(where: { $0.id == id }) else {
-            return .result()
-        }
-
-        if existing.type == .hotp {
-            let updatedSnapshot = try KeychainVaultStore.shared.mutateSnapshot { snapshot in
-                guard let idx = snapshot.accounts.firstIndex(where: { $0.id == id }) else { return }
-                targetAccount = snapshot.accounts[idx]
-                snapshot.accounts[idx].counter &+= 1
-                snapshot.accounts[idx].updatedAt = now
+        let updatedSnapshot = try KeychainVaultStore.shared.mutateSnapshotIfPresent { snapshot in
+            guard let idx = snapshot.accounts.firstIndex(where: { $0.id == id }) else {
+                return false
             }
-            _ = updatedSnapshot
-        } else {
-            targetAccount = existing
+            let current = snapshot.accounts[idx]
+            targetAccount = current
+            guard current.isSupportedAlgorithm, current.type == .hotp else {
+                return false
+            }
+            snapshot.accounts[idx].counter &+= 1
+            snapshot.accounts[idx].updatedAt = now
+            return true
         }
 
-        guard let accountToCopy = targetAccount else {
+        guard updatedSnapshot != nil,
+              let accountToCopy = targetAccount,
+              accountToCopy.isSupportedAlgorithm else {
             return .result()
         }
 

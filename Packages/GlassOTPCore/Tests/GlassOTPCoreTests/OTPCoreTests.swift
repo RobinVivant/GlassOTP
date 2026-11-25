@@ -127,7 +127,7 @@ struct OTPCoreTests {
         #expect(accounts[0].type == .totp)
     }
 
-    @Test("GlassOTPBackupCodec encrypt/decrypt round-trip and wrong-password check")
+    @Test("GlassOTPBackupCodec encrypt/decrypt round-trip, v2 cost header, minimum password, and wrong-password check")
     func glassOTPBackupRoundTrip() throws {
         let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
         let folder = OTPFolder(name: "Engineering", symbolName: "server.rack", sortOrder: 0, updatedAt: fixedDate)
@@ -142,15 +142,24 @@ struct OTPCoreTests {
         )
         let snapshot = OTPVaultSnapshot(folders: [folder], accounts: [account], updatedAt: fixedDate)
 
+        #expect(throws: OTPImportError.passwordTooShort(8)) {
+            try GlassOTPBackupCodec.encode(snapshot: snapshot, password: "short")
+        }
+
+        // Verify default GLOTP2 encode writes log2N = 16 (N = 65,536 / 64 MiB) and round-trips cleanly
         let encrypted = try GlassOTPBackupCodec.encode(snapshot: snapshot, password: "correct-horse-battery")
         #expect(GlassOTPBackupCodec.isGlassOTPBackup(encrypted))
+        #expect(encrypted.starts(with: Data("GLOTP2".utf8)))
+        #expect(encrypted.count > 6 && encrypted[6] == 16)
 
         let decoded = try GlassOTPBackupCodec.decode(data: encrypted, password: "correct-horse-battery")
         #expect(decoded.folders == snapshot.folders)
         #expect(decoded.accounts == snapshot.accounts)
 
+        // Use fast N=4096 internal overload for negative wrong-password verification
+        let fastEncrypted = try GlassOTPBackupCodec.encode(snapshot: snapshot, password: "correct-horse-battery", log2N: 12)
         #expect(throws: OTPImportError.wrongPassword) {
-            try GlassOTPBackupCodec.decode(data: encrypted, password: "wrong-password")
+            try GlassOTPBackupCodec.decode(data: fastEncrypted, password: "wrong-password")
         }
     }
 
@@ -409,5 +418,105 @@ struct OTPCoreTests {
         #expect(throws: OTPImportError.self) {
             try KeyedArchiveParser.parseRoot(from: xmlData)
         }
+    }
+
+    @Test("Snapshot merge honors same-second tombstones, HOTP counterResetAt decrements, and tombstone limits")
+    func snapshotMergeCounterResetAndTombstones() {
+        let t1 = Date(timeIntervalSince1970: 1_700_000_000)
+        let t2 = Date(timeIntervalSince1970: 1_700_000_010)
+        let hotpID = UUID()
+        let sameSecondDeleteID = UUID()
+        let extraDeletedA = UUID()
+        let extraDeletedB = UUID()
+
+        // Device A incremented counter to 10; Device B explicitly lowered counter to 2 with counterResetAt = t2
+        let sideA = OTPVaultSnapshot(
+            accounts: [
+                OTPAccount(id: hotpID, issuer: "Yubi", label: "a", secret: Data("123".utf8), type: .hotp, counter: 10, createdAt: t1, updatedAt: t1),
+                OTPAccount(id: sameSecondDeleteID, issuer: "Temp", label: "b", secret: Data("456".utf8), createdAt: t1, updatedAt: t1),
+            ],
+            updatedAt: t1
+        )
+        let sideB = OTPVaultSnapshot(
+            accounts: [
+                OTPAccount(id: hotpID, issuer: "Yubi", label: "a", secret: Data("123".utf8), type: .hotp, counter: 2, createdAt: t1, updatedAt: t2, counterResetAt: t2),
+            ],
+            updatedAt: t2,
+            accountTombstones: [
+                OTPTombstone(id: sameSecondDeleteID, deletedAt: t1), // exact same second as updatedAt
+                OTPTombstone(id: extraDeletedA, deletedAt: t1),
+                OTPTombstone(id: extraDeletedB, deletedAt: t2),
+            ]
+        )
+
+        let mergedAB = sideA.merged(with: sideB, tombstoneLimit: 2)
+        let mergedBA = sideB.merged(with: sideA, tombstoneLimit: 2)
+        #expect(mergedAB.accounts.count == 1)
+        #expect(mergedAB.accounts[0].counter == 2)
+        #expect(mergedAB.accounts[0].counterResetAt == t2)
+        #expect(mergedBA.accounts == mergedAB.accounts)
+        #expect(!mergedAB.accounts.contains(where: { $0.id == sameSecondDeleteID }))
+        #expect(mergedAB.accountTombstones.count == 2)
+        #expect(mergedAB.accountTombstones.contains(where: { $0.id == extraDeletedB }))
+    }
+
+    @Test("VaultImportReconciler avoids tombstoned UUIDs and honors preserveEmptyFolders")
+    func reconcilerTombstonesAndEmptyFolders() {
+        let deletedAccountID = UUID()
+        let deletedFolderID = UUID()
+        let emptyFolder = OTPFolder(id: deletedFolderID, name: "Archive", sortOrder: 0)
+        let importedAccount = OTPAccount(id: deletedAccountID, issuer: "GitHub", label: "u", secret: Data("SECRET".utf8))
+
+        let planWithEmpty = VaultImportReconciler.reconcile(
+            importedAccounts: [importedAccount],
+            importedFolders: [emptyFolder],
+            existingAccounts: [],
+            existingFolders: [],
+            existingAccountTombstones: [OTPTombstone(id: deletedAccountID, deletedAt: Date())],
+            existingFolderTombstones: [OTPTombstone(id: deletedFolderID, deletedAt: Date())],
+            preserveEmptyFolders: true
+        )
+        #expect(planWithEmpty.accounts.count == 1)
+        #expect(planWithEmpty.accounts[0].id != deletedAccountID)
+        #expect(planWithEmpty.folders.count == 1)
+        #expect(planWithEmpty.folders[0].id != deletedFolderID)
+
+        let planWithoutEmpty = VaultImportReconciler.reconcile(
+            importedAccounts: [importedAccount],
+            importedFolders: [emptyFolder],
+            existingAccounts: [],
+            existingFolders: [],
+            preserveEmptyFolders: false
+        )
+        #expect(planWithoutEmpty.folders.isEmpty)
+    }
+
+    @Test("OTPAccount Codable clamps out-of-range digits/period and SharedWidgetStateStore expires strictly before 2.5s")
+    func accountClampingAndCopyExpiryBoundary() throws {
+        let json = Data("""
+        {
+          "id": "\(UUID().uuidString)",
+          "issuer": "Legacy",
+          "label": "u",
+          "secret": "\(Data("12345".utf8).base64EncodedString())",
+          "type": "totp",
+          "algorithm": "md5",
+          "digits": 12,
+          "period": -5
+        }
+        """.utf8)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let account = try decoder.decode(OTPAccount.self, from: json)
+        #expect(account.digits == 6)
+        #expect(account.period == 30)
+        #expect(!account.isSupportedAlgorithm)
+
+        let testID = UUID()
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        SharedWidgetStateStore.recordCopy(accountID: testID, at: t0)
+        #expect(SharedWidgetStateStore.copyExpiry(accountID: testID, now: t0.addingTimeInterval(2.49)) != nil)
+        #expect(SharedWidgetStateStore.copyExpiry(accountID: testID, now: t0.addingTimeInterval(2.5)) == nil)
+        #expect(!SharedWidgetStateStore.wasRecentlyCopied(accountID: testID, now: t0.addingTimeInterval(2.5)))
     }
 }

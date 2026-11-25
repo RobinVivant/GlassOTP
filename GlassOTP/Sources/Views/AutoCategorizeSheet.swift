@@ -249,7 +249,10 @@ struct AutoCategorizeSheet: View {
     private func applyNow() {
         isApplying = true
         let filteredAssignments = assignments.filter { selectedIDs.contains($0.key) }
-        vault.applyCategorization(filteredAssignments, removeEmptyDefaultFolder: removeEmptyDefaultFolder)
+        guard vault.applyCategorization(filteredAssignments, removeEmptyDefaultFolder: removeEmptyDefaultFolder) else {
+            isApplying = false
+            return
+        }
 
         if fetchWebLogos {
             let selectedAccounts = vault.accounts.filter { selectedIDs.contains($0.id) }

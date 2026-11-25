@@ -111,8 +111,15 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
     public var sortOrder: Int
     public var createdAt: Date
     public var updatedAt: Date
+    public var counterResetAt: Date?
     public var customBrandSlug: String?
     public var customLogoDomain: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, issuer, label, secret, type, algorithm, digits, period, counter
+        case folderID, isPinned, sortOrder, createdAt, updatedAt, counterResetAt
+        case customBrandSlug, customLogoDomain
+    }
 
     public init(
         id: UUID = UUID(),
@@ -129,6 +136,7 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         sortOrder: Int = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
+        counterResetAt: Date? = nil,
         customBrandSlug: String? = nil,
         customLogoDomain: String? = nil
     ) {
@@ -146,8 +154,36 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         self.sortOrder = sortOrder
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.counterResetAt = counterResetAt
         self.customBrandSlug = customBrandSlug
         self.customLogoDomain = customLogoDomain
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.issuer = (try container.decodeIfPresent(String.self, forKey: .issuer) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        self.label = (try container.decodeIfPresent(String.self, forKey: .label) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        self.secret = try container.decode(Data.self, forKey: .secret)
+        self.type = try container.decodeIfPresent(OTPType.self, forKey: .type) ?? .totp
+        self.algorithm = try container.decodeIfPresent(OTPAlgorithm.self, forKey: .algorithm) ?? .sha1
+        let decodedDigits = try container.decodeIfPresent(Int.self, forKey: .digits) ?? 6
+        self.digits = (4...10).contains(decodedDigits) ? decodedDigits : 6
+        let decodedPeriod = try container.decodeIfPresent(Int.self, forKey: .period) ?? 30
+        self.period = decodedPeriod > 0 ? decodedPeriod : 30
+        self.counter = try container.decodeIfPresent(UInt64.self, forKey: .counter) ?? 0
+        self.folderID = try container.decodeIfPresent(UUID.self, forKey: .folderID)
+        self.isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        self.sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder) ?? 0
+        self.createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? .distantPast
+        self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .distantPast
+        self.counterResetAt = try container.decodeIfPresent(Date.self, forKey: .counterResetAt)
+        self.customBrandSlug = try container.decodeIfPresent(String.self, forKey: .customBrandSlug)
+        self.customLogoDomain = try container.decodeIfPresent(String.self, forKey: .customLogoDomain)
+    }
+
+    public var isSupportedAlgorithm: Bool {
+        algorithm != .md5
     }
 
     public var displayTitle: String {
@@ -266,7 +302,7 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         self.folderTombstones = try container.decodeIfPresent([OTPTombstone].self, forKey: .folderTombstones) ?? []
     }
 
-    public func merged(with incoming: OTPVaultSnapshot, tombstoneLimit: Int = 500) -> OTPVaultSnapshot {
+    public func merged(with incoming: OTPVaultSnapshot, tombstoneLimit: Int? = nil) -> OTPVaultSnapshot {
         var folderTombstoneMap: [UUID: Date] = [:]
         for tombstone in folderTombstones + incoming.folderTombstones {
             if let existing = folderTombstoneMap[tombstone.id] {
@@ -293,7 +329,7 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         var mergedFolders: [OTPFolder] = []
         mergedFolders.reserveCapacity(folderMap.count)
         for (id, folder) in folderMap {
-            if let deletedAt = folderTombstoneMap[id], deletedAt > folder.updatedAt {
+            if let deletedAt = folderTombstoneMap[id], deletedAt >= folder.updatedAt {
                 continue
             }
             folderTombstoneMap.removeValue(forKey: id)
@@ -322,10 +358,20 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
             if let existing = accountMap[account.id] {
                 var winner = account.updatedAt >= existing.updatedAt ? account : existing
                 if existing.type == .hotp && account.type == .hotp {
-                    let maxCounter = max(existing.counter, account.counter)
-                    if winner.counter != maxCounter {
-                        winner.counter = maxCounter
-                        winner.updatedAt = max(existing.updatedAt, account.updatedAt)
+                    let existingReset = existing.counterResetAt ?? .distantPast
+                    let incomingReset = account.counterResetAt ?? .distantPast
+                    if incomingReset > existingReset {
+                        winner.counter = account.counter
+                        winner.counterResetAt = account.counterResetAt
+                    } else if existingReset > incomingReset {
+                        winner.counter = existing.counter
+                        winner.counterResetAt = existing.counterResetAt
+                    } else {
+                        let maxCounter = max(existing.counter, account.counter)
+                        if winner.counter != maxCounter {
+                            winner.counter = maxCounter
+                            winner.updatedAt = max(existing.updatedAt, account.updatedAt)
+                        }
                     }
                 }
                 accountMap[account.id] = winner
@@ -337,7 +383,7 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         var mergedAccounts: [OTPAccount] = []
         mergedAccounts.reserveCapacity(accountMap.count)
         for (id, var account) in accountMap {
-            if let deletedAt = accountTombstoneMap[id], deletedAt > account.updatedAt {
+            if let deletedAt = accountTombstoneMap[id], deletedAt >= account.updatedAt {
                 continue
             }
             accountTombstoneMap.removeValue(forKey: id)
@@ -351,22 +397,23 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
             return $0.id.uuidString < $1.id.uuidString
         }
 
-        let boundedFolderTombstones = folderTombstoneMap
+        let sortedFolderTombstones = folderTombstoneMap
             .map { OTPTombstone(id: $0.key, deletedAt: $0.value) }
             .sorted { $0.deletedAt > $1.deletedAt }
-            .prefix(tombstoneLimit)
-        let boundedAccountTombstones = accountTombstoneMap
+        let sortedAccountTombstones = accountTombstoneMap
             .map { OTPTombstone(id: $0.key, deletedAt: $0.value) }
             .sorted { $0.deletedAt > $1.deletedAt }
-            .prefix(tombstoneLimit)
+
+        let finalFolderTombstones = tombstoneLimit.map { Array(sortedFolderTombstones.prefix($0)) } ?? sortedFolderTombstones
+        let finalAccountTombstones = tombstoneLimit.map { Array(sortedAccountTombstones.prefix($0)) } ?? sortedAccountTombstones
 
         return OTPVaultSnapshot(
             schemaVersion: max(schemaVersion, incoming.schemaVersion),
             folders: mergedFolders,
             accounts: mergedAccounts,
             updatedAt: max(updatedAt, incoming.updatedAt),
-            accountTombstones: Array(boundedAccountTombstones),
-            folderTombstones: Array(boundedFolderTombstones)
+            accountTombstones: finalAccountTombstones,
+            folderTombstones: finalFolderTombstones
         )
     }
 }
@@ -384,8 +431,11 @@ public enum VaultImportReconciler {
         importedFolders: [OTPFolder],
         existingAccounts: [OTPAccount],
         existingFolders: [OTPFolder],
+        existingAccountTombstones: [OTPTombstone] = [],
+        existingFolderTombstones: [OTPTombstone] = [],
         selectedIDs: Set<UUID>? = nil,
         skipDuplicates: Bool = true,
+        preserveEmptyFolders: Bool = false,
         importedAt: Date = Date()
     ) -> Plan {
         let filteredImports: [OTPAccount]
@@ -397,7 +447,7 @@ public enum VaultImportReconciler {
 
         var mergedFolders = existingFolders
         var folderIDByLowerName: [String: UUID] = [:]
-        var usedFolderIDs = Set(existingFolders.map(\.id))
+        var usedFolderIDs = Set(existingFolders.map(\.id)).union(existingFolderTombstones.map(\.id))
         for folder in existingFolders {
             let key = folder.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if !key.isEmpty, folderIDByLowerName[key] == nil {
@@ -410,11 +460,35 @@ public enum VaultImportReconciler {
         )
 
         var mergedAccounts = existingAccounts
-        var seenAccountIDs = Set(existingAccounts.map(\.id))
+        var seenAccountIDs = Set(existingAccounts.map(\.id)).union(existingAccountTombstones.map(\.id))
         var seenFingerprints = Set(existingAccounts.map(\.fingerprint))
         var folderIDMap: [UUID: UUID] = [:]
         var addedCount = 0
         var skippedDuplicateCount = 0
+
+        func ensureFolder(_ importedFolder: OTPFolder) -> UUID {
+            if let mappedID = folderIDMap[importedFolder.id] {
+                return mappedID
+            }
+            let cleanName = importedFolder.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = cleanName.lowercased()
+            if !key.isEmpty, let existingID = folderIDByLowerName[key] {
+                folderIDMap[importedFolder.id] = existingID
+                return existingID
+            }
+            let resolvedFolderID = usedFolderIDs.contains(importedFolder.id) ? UUID() : importedFolder.id
+            var folder = importedFolder
+            folder.id = resolvedFolderID
+            folder.sortOrder = mergedFolders.count
+            folder.updatedAt = importedAt
+            mergedFolders.append(folder)
+            usedFolderIDs.insert(resolvedFolderID)
+            if !key.isEmpty {
+                folderIDByLowerName[key] = resolvedFolderID
+            }
+            folderIDMap[importedFolder.id] = resolvedFolderID
+            return resolvedFolderID
+        }
 
         for var account in filteredImports {
             let fp = account.fingerprint
@@ -429,29 +503,7 @@ public enum VaultImportReconciler {
 
             if let sourceFolderID = account.folderID,
                let importedFolder = importedFolderByID[sourceFolderID] {
-                if let mappedID = folderIDMap[sourceFolderID] {
-                    account.folderID = mappedID
-                } else {
-                    let cleanName = importedFolder.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let key = cleanName.lowercased()
-                    if !key.isEmpty, let existingID = folderIDByLowerName[key] {
-                        folderIDMap[sourceFolderID] = existingID
-                        account.folderID = existingID
-                    } else {
-                        let resolvedFolderID = usedFolderIDs.contains(importedFolder.id) ? UUID() : importedFolder.id
-                        var folder = importedFolder
-                        folder.id = resolvedFolderID
-                        folder.sortOrder = mergedFolders.count
-                        folder.updatedAt = importedAt
-                        mergedFolders.append(folder)
-                        usedFolderIDs.insert(resolvedFolderID)
-                        if !key.isEmpty {
-                            folderIDByLowerName[key] = resolvedFolderID
-                        }
-                        folderIDMap[sourceFolderID] = resolvedFolderID
-                        account.folderID = resolvedFolderID
-                    }
-                }
+                account.folderID = ensureFolder(importedFolder)
             } else {
                 account.folderID = nil
             }
@@ -462,6 +514,12 @@ public enum VaultImportReconciler {
             seenFingerprints.insert(fp)
             mergedAccounts.append(account)
             addedCount += 1
+        }
+
+        if preserveEmptyFolders {
+            for importedFolder in importedFolders {
+                _ = ensureFolder(importedFolder)
+            }
         }
 
         return Plan(

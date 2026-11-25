@@ -7,6 +7,7 @@ struct FoldersView: View {
 
     @State private var showingEditor = false
     @State private var editingFolder: OTPFolder?
+    @State private var deletingFolder: OTPFolder?
     @State private var folderName = ""
     @State private var folderSymbol = "folder.fill"
 
@@ -67,7 +68,7 @@ struct FoldersView: View {
                                 }
 
                                 Button(role: .destructive) {
-                                    vault.deleteFolder(folder)
+                                    deletingFolder = folder
                                 } label: {
                                     Label("Delete Folder", systemImage: "trash")
                                 }
@@ -135,18 +136,41 @@ struct FoldersView: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") {
+                            let saved: Bool
                             if let existing = editingFolder {
-                                vault.renameFolder(existing, to: folderName, symbolName: folderSymbol)
+                                saved = vault.renameFolder(existing, to: folderName, symbolName: folderSymbol)
                             } else {
-                                vault.addFolder(name: folderName, symbolName: folderSymbol)
+                                saved = vault.addFolder(name: folderName, symbolName: folderSymbol)
                             }
-                            showingEditor = false
+                            if saved {
+                                showingEditor = false
+                            }
                         }
                         .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
             }
             .presentationDetents([.medium])
+        }
+        .confirmationDialog(
+            "Delete Folder \"\(deletingFolder?.name ?? "")\"?",
+            isPresented: Binding(
+                get: { deletingFolder != nil },
+                set: { if !$0 { deletingFolder = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Folder", role: .destructive) {
+                if let folder = deletingFolder {
+                    vault.deleteFolder(folder)
+                    deletingFolder = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                deletingFolder = nil
+            }
+        } message: {
+            Text("Accounts inside this folder won't be deleted — they will move to Uncategorized.")
         }
     }
 

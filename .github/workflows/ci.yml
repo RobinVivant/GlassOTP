@@ -30,8 +30,8 @@ jobs:
 
       - name: Verify open-source secret and team scrubbing
         run: |
-          if grep -rnE "6G27LL5LJG|00008110-000C69D63E84801E" \
-            Config GlassOTP GlassOTPWidget GlassOTPMac Packages Shared project.yml README.md SECURITY.md CONTRIBUTING.md; then
+          if grep -rnE "DEVELOPMENT_TEAM\s*=\s*[A-Z0-9]{10}|[0-9A-F]{8}-[0-9A-F]{16}" \
+            Config GlassOTP GlassOTPWidget GlassOTPMac Packages Shared project.yml README.md SECURITY.md CONTRIBUTING.md .github; then
             echo "Found untracked team or device identifiers!"
             exit 1
           fi

@@ -2,6 +2,21 @@
 
 All notable changes to GlassOTP are documented in this file.
 
+## [1.2.0] - 2026-11-25
+
+### Added
+- Interprocess POSIX file locking (`flock`) and a local `ThisDeviceOnly` replica (`local-replica-v1`) in `KeychainVaultStore` so simultaneous iPhone, Widget, and Mac saves reconcile safely with bounded (`500`) tombstones and `counterResetAt` HOTP tracking.
+- Shared App Lock preference (`SharedSecurityPreferences.isAppLockEnabled`) forcing Tap-to-Reveal masking on widgets when Face ID / Touch ID lock is enabled, plus passcode/biometry availability gating on app lock toggle.
+- Explicit Google Favicons disclosure in settings, `README.md`, and `SECURITY.md`, plus `"Unsupported"` status handling across iOS, widgets, and macOS for legacy MD5 accounts from older exports.
+- Actionable `"Retry Deleting iCloud Copy"` control when turning off iCloud Keychain sync leaves a cloud cleanup error.
+
+### Fixed
+- Fixed an infinite Face ID re-lock loop when Auto-Lock is set to "Immediately" by ignoring `isAuthenticating` `.inactive` transitions and clearing `backgroundedAt` on unlock.
+- Fixed iOS camera scanner authorization timing, app-switcher scene-phase recovery, off-MainActor QR photo decoding, torch toolbar gating, and temporary `/Documents/Inbox/` file cleanup after import.
+- Fixed `BrandLogoFetcher` to restrict remote lookups strictly to Google Favicons (`s2/favicons`) over HTTPS port 443 with streaming 512 KiB size enforcement and verified redirect targets.
+- Fixed HOTP counter reservation races in `CopyOTPWidgetIntent`, `CopyMacOTPIntent`, `glassotp://` deep links, and macOS copy actions, plus target-process verification (`postToPid`) for macOS auto-type, hotkey collision prevention, async background sync polling, modal sheet resign guarding, and chronological mixed-period widget timelines.
+- Bumped `GLOTP2` default `scrypt` work factor to `N = 65536` (`log2N = 16`, 64 MiB), enforced the 8-character minimum password check inside `GlassOTPBackupCodec.encode`, normalized hyphenated algorithms in `VaultImporter`, preserved empty folders on full `.glassotp` restore, and bumped bundle versions (`1.2.0`, build `3`).
+
 ## [1.1.0] - 2026-11-25
 
 ### Added

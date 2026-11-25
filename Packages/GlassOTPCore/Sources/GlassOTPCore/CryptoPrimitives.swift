@@ -6,6 +6,7 @@ import Security
 public enum OTPImportError: Error, LocalizedError, Equatable, Sendable {
     case invalidFileFormat
     case passwordRequired(String)
+    case passwordTooShort(Int)
     case wrongPassword
     case unsupportedVersion(Double)
     case unsupportedEncryptedFormat(String)
@@ -17,6 +18,8 @@ public enum OTPImportError: Error, LocalizedError, Equatable, Sendable {
             "This file isn't a recognized OTP backup or export format."
         case .passwordRequired(let format):
             "This \(format) is encrypted. Enter the backup password to decrypt it."
+        case .passwordTooShort(let minimum):
+            "Use a backup password of at least \(minimum) characters."
         case .wrongPassword:
             "Incorrect backup password. Please verify and try again."
         case .unsupportedVersion(let version):
@@ -275,7 +278,7 @@ public enum CryptoPrimitives {
         let (nr, overflow4) = n.multipliedReportingOverflow(by: r)
         let (nrp, overflow5) = nr.multipliedReportingOverflow(by: p)
         guard !overflow1, !overflow2, !overflow3, !overflow4, !overflow5,
-              scratchBytes <= 64 * 1024 * 1024,
+              scratchBytes <= 128 * 1024 * 1024,
               initialBytes <= 64 * 1024,
               nrp <= 2_097_152,
               initialBytes > 0 else {

@@ -138,13 +138,19 @@ struct GlassOTPApp: App {
     }
 
     private var shouldBlurContent: Bool {
-        security.isLocked || (security.appSwitcherBlurEnabled && scenePhase != .active)
+        security.isLocked
+            || (scenePhase != .active
+                && !security.isAuthenticating
+                && (security.appSwitcherBlurEnabled || (security.biometricLockEnabled && security.autoLockDelaySeconds == 0)))
     }
 
     private func syncPrivacyCover() {
+        let shouldBlur = scenePhase != .active
+            && !security.isAuthenticating
+            && (security.appSwitcherBlurEnabled || (security.biometricLockEnabled && security.autoLockDelaySeconds == 0))
         privacyCover.update(
             isLocked: security.isLocked,
-            isBlurred: security.appSwitcherBlurEnabled && scenePhase != .active,
+            isBlurred: shouldBlur,
             security: security
         )
     }

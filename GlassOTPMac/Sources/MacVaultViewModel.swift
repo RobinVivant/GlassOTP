@@ -56,6 +56,17 @@ final class MacVaultViewModel {
 
     var quickPickerHotKey: HotKeyCombo? {
         didSet {
+            if let picker = quickPickerHotKey {
+                let collidingIDs = accountHotKeys.filter { $0.value == picker }.map(\.key)
+                if !collidingIDs.isEmpty {
+                    var updated = accountHotKeys
+                    for id in collidingIDs {
+                        updated.removeValue(forKey: id)
+                    }
+                    accountHotKeys = updated
+                    alertMessage = "Shortcut \(picker.displayString) was reassigned to Quick Search Popover."
+                }
+            }
             persistQuickPickerHotKey()
             registerHotKeys()
         }
@@ -207,6 +218,10 @@ final class MacVaultViewModel {
     }
 
     func assignHotKey(_ combo: HotKeyCombo?, for accountID: UUID) {
+        if let combo, combo == quickPickerHotKey {
+            alertMessage = "Shortcut \(combo.displayString) is already assigned to Quick Search Popover."
+            return
+        }
         var updated = accountHotKeys
         if let combo {
             for (existingID, existingCombo) in updated where existingCombo == combo {
@@ -219,38 +234,57 @@ final class MacVaultViewModel {
         accountHotKeys = updated
     }
 
+    private func applyLoadedSnapshot(_ snapshot: OTPVaultSnapshot?) {
+        if let snapshot {
+            let sortedFolders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
+            let sortedAccounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
+            if folders != sortedFolders {
+                folders = sortedFolders
+            }
+            if accounts != sortedAccounts {
+                accounts = sortedAccounts
+            }
+            accountTombstones = snapshot.accountTombstones
+            folderTombstones = snapshot.folderTombstones
+            if let selectedFolderID, !sortedFolders.contains(where: { $0.id == selectedFolderID }) {
+                self.selectedFolderID = nil
+            }
+            if let pinnedID = menuBarAccountID, !sortedAccounts.contains(where: { $0.id == pinnedID }) {
+                menuBarAccountID = nil
+            }
+        } else {
+            folders = []
+            accounts = []
+            accountTombstones = []
+            folderTombstones = []
+            selectedFolderID = nil
+            menuBarAccountID = nil
+        }
+        lastSyncDate = Date()
+        hasLoadError = false
+        syncError = nil
+    }
+
     func reloadFromStore() {
         do {
-            if let snapshot = try store.loadSnapshot() {
-                let sortedFolders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
-                let sortedAccounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
-                if folders != sortedFolders {
-                    folders = sortedFolders
-                }
-                if accounts != sortedAccounts {
-                    accounts = sortedAccounts
-                }
-                accountTombstones = snapshot.accountTombstones
-                folderTombstones = snapshot.folderTombstones
-                if let selectedFolderID, !sortedFolders.contains(where: { $0.id == selectedFolderID }) {
-                    self.selectedFolderID = nil
-                }
-                if let pinnedID = menuBarAccountID, !sortedAccounts.contains(where: { $0.id == pinnedID }) {
-                    menuBarAccountID = nil
-                }
-                lastSyncDate = Date()
-            } else {
-                folders = []
-                accounts = []
-                accountTombstones = []
-                folderTombstones = []
-                selectedFolderID = nil
-                menuBarAccountID = nil
-                lastSyncDate = Date()
-            }
-            hasLoadError = false
-            syncError = nil
+            let snapshot = try store.loadSnapshot()
+            applyLoadedSnapshot(snapshot)
         } catch {
+            hasLoadError = true
+            syncError = error.localizedDescription
+        }
+    }
+
+    func reloadFromStoreAsync() async {
+        let store = self.store
+        do {
+            let loaded = try await Task.detached(priority: .utility) {
+                try store.loadSnapshot()
+            }.value
+            guard !Task.isCancelled else { return }
+            applyLoadedSnapshot(loaded)
+        } catch {
+            guard !Task.isCancelled else { return }
             hasLoadError = true
             syncError = error.localizedDescription
         }
@@ -274,14 +308,7 @@ final class MacVaultViewModel {
         )
         do {
             let merged = try store.saveMergedSnapshot(snapshot)
-            let sortedFolders = merged.folders.sorted { $0.sortOrder < $1.sortOrder }
-            let sortedAccounts = merged.accounts.sorted { $0.sortOrder < $1.sortOrder }
-            if folders != sortedFolders { folders = sortedFolders }
-            if accounts != sortedAccounts { accounts = sortedAccounts }
-            accountTombstones = merged.accountTombstones
-            folderTombstones = merged.folderTombstones
-            lastSyncDate = Date()
-            syncError = nil
+            applyLoadedSnapshot(merged)
             return true
         } catch {
             syncError = error.localizedDescription
@@ -291,6 +318,10 @@ final class MacVaultViewModel {
     }
 
     func copyCode(for account: OTPAccount, fromDirectHotKey: Bool = false) {
+        guard account.isSupportedAlgorithm else {
+            alertMessage = "\(account.displayTitle) uses legacy \(account.algorithm.displayName), which GlassOTP no longer generates."
+            return
+        }
         let now = Date()
         var effectiveAccount = account
 
@@ -299,27 +330,41 @@ final class MacVaultViewModel {
                 alertMessage = "Cannot advance HOTP counter because the Keychain vault failed to load."
                 return
             }
+            var reservedAccount: OTPAccount?
             do {
-                let updatedSnapshot = try store.mutateSnapshot { snapshot in
+                let updatedSnapshot = try store.mutateSnapshotIfPresent { snapshot in
                     guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }) else {
-                        return
+                        return false
                     }
-                    effectiveAccount = snapshot.accounts[idx]
+                    let current = snapshot.accounts[idx]
+                    reservedAccount = current
+                    guard current.isSupportedAlgorithm else {
+                        return false
+                    }
                     snapshot.accounts[idx].counter &+= 1
                     snapshot.accounts[idx].updatedAt = now
+                    return true
                 }
-                let sortedFolders = updatedSnapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
-                let sortedAccounts = updatedSnapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
-                if folders != sortedFolders { folders = sortedFolders }
-                if accounts != sortedAccounts { accounts = sortedAccounts }
-                accountTombstones = updatedSnapshot.accountTombstones
-                folderTombstones = updatedSnapshot.folderTombstones
-                lastSyncDate = now
+                if let updatedSnapshot {
+                    applyLoadedSnapshot(updatedSnapshot)
+                } else {
+                    reloadFromStore()
+                    return
+                }
             } catch {
                 syncError = error.localizedDescription
                 alertMessage = error.localizedDescription
                 return
             }
+            guard let verified = reservedAccount else {
+                reloadFromStore()
+                return
+            }
+            guard verified.isSupportedAlgorithm else {
+                alertMessage = "\(verified.displayTitle) uses legacy \(verified.algorithm.displayName), which GlassOTP no longer generates."
+                return
+            }
+            effectiveAccount = verified
         }
 
         let snapshot = OTPGenerator.snapshot(for: effectiveAccount, at: now, includeNextCode: false)
@@ -327,7 +372,11 @@ final class MacVaultViewModel {
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
 
         let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let willAutoType = fromDirectHotKey && autoTypeOnHotKey && AXIsProcessTrusted() && targetPID != ProcessInfo.processInfo.processIdentifier
+        let willAutoType = fromDirectHotKey
+            && autoTypeOnHotKey
+            && AXIsProcessTrusted()
+            && targetPID != nil
+            && targetPID != ProcessInfo.processInfo.processIdentifier
         if willAutoType {
             scheduleAutoType(snapshot.code, targetPID: targetPID)
         }
@@ -344,10 +393,13 @@ final class MacVaultViewModel {
     }
 
     func togglePin(_ account: OTPAccount) {
+        let prevAccounts = accounts
         guard let idx = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[idx].isPinned.toggle()
         accounts[idx].updatedAt = Date()
-        _ = persist()
+        if !persist() {
+            accounts = prevAccounts
+        }
     }
 
     func handleAccountHotKey(_ accountID: UUID) {
@@ -385,15 +437,29 @@ final class MacVaultViewModel {
                 }
 
                 let summary = importAccounts(parsed, folders: [], skipDuplicates: true)
+                let outcomeTitle = summary.saved ? "GlassOTP Import" : "Import Failed"
+                let outcomeText: String
                 if summary.saved {
-                    alertMessage = summary.addedCount > 0
+                    outcomeText = summary.addedCount > 0
                         ? "Imported \(summary.addedCount) account\(summary.addedCount == 1 ? "" : "s") into Keychain."
                         : "Account is already in your vault."
+                } else {
+                    outcomeText = alertMessage ?? "Couldn't save imported accounts to Keychain."
                 }
+                presentExternalAlert(title: outcomeTitle, message: outcomeText)
             } catch {
-                alertMessage = error.localizedDescription
+                presentExternalAlert(title: "Import Failed", message: error.localizedDescription)
             }
         }
+    }
+
+    private func presentExternalAlert(title: String, message: String) {
+        let infoAlert = NSAlert()
+        infoAlert.messageText = title
+        infoAlert.informativeText = message
+        infoAlert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        infoAlert.runModal()
     }
 
     struct ImportSummary {
@@ -406,16 +472,21 @@ final class MacVaultViewModel {
     func importAccounts(
         _ incomingAccounts: [OTPAccount],
         folders incomingFolders: [OTPFolder],
-        skipDuplicates: Bool
+        skipDuplicates: Bool,
+        preserveEmptyFolders: Bool = false
     ) -> ImportSummary {
         let plan = VaultImportReconciler.reconcile(
             importedAccounts: incomingAccounts,
             importedFolders: incomingFolders,
             existingAccounts: accounts,
             existingFolders: folders,
-            skipDuplicates: skipDuplicates
+            existingAccountTombstones: accountTombstones,
+            existingFolderTombstones: folderTombstones,
+            skipDuplicates: skipDuplicates,
+            preserveEmptyFolders: preserveEmptyFolders
         )
-        guard plan.addedCount > 0 else {
+        let foldersChanged = plan.folders != folders
+        guard plan.addedCount > 0 || (preserveEmptyFolders && foldersChanged) else {
             return ImportSummary(addedCount: 0, skippedDuplicates: plan.skippedDuplicateCount, saved: true)
         }
         let prevFolders = folders
@@ -440,7 +511,13 @@ final class MacVaultViewModel {
                 )
             }.value
 
-            let summary = importAccounts(result.accounts, folders: result.folders, skipDuplicates: true)
+            let preserveEmpty = result.formatDescription == "GlassOTP Encrypted Backup"
+            let summary = importAccounts(
+                result.accounts,
+                folders: result.folders,
+                skipDuplicates: true,
+                preserveEmptyFolders: preserveEmpty
+            )
             guard summary.saved else {
                 return .failure(NSError(
                     domain: "GlassOTP",
@@ -473,12 +550,13 @@ final class MacVaultViewModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(20))
                 guard !Task.isCancelled, let self else { break }
-                self.reloadFromStore()
+                await self.reloadFromStoreAsync()
             }
         }
     }
 
     private func scheduleAutoType(_ code: String, targetPID: pid_t?) {
+        guard let targetPID else { return }
         autoTypeTask?.cancel()
         autoTypeTask = Task {
             let modifierMask: CGEventFlags = [.maskControl, .maskAlternate, .maskCommand, .maskShift]
@@ -493,12 +571,13 @@ final class MacVaultViewModel {
                 try? await Task.sleep(for: .milliseconds(15))
             }
             guard !Task.isCancelled, modifiersReleased else { return }
-            if let targetPID, NSWorkspace.shared.frontmostApplication?.processIdentifier != targetPID {
-                return
-            }
             guard let source = CGEventSource(stateID: .privateState) else { return }
 
             for character in code {
+                guard !Task.isCancelled,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else {
+                    return
+                }
                 guard let keyCode = Self.virtualKeyCode(for: character) else { continue }
                 guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
                       let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
@@ -509,8 +588,8 @@ final class MacVaultViewModel {
                 var utf16 = Array(String(character).utf16)
                 keyDown.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
                 keyUp.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
-                keyDown.post(tap: .cghidEventTap)
-                keyUp.post(tap: .cghidEventTap)
+                keyDown.postToPid(targetPID)
+                keyUp.postToPid(targetPID)
                 try? await Task.sleep(for: .milliseconds(8))
             }
         }
