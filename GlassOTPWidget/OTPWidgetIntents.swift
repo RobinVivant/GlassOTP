@@ -22,7 +22,7 @@ struct AccountWidgetEntityQuery: EntityQuery {
     func entities(for identifiers: [AccountWidgetEntity.ID]) async throws -> [AccountWidgetEntity] {
         if SharedSecurityPreferences.effectiveAppLockEnabled {
             return identifiers.map {
-                AccountWidgetEntity(id: $0, title: "Locked Account", subtitle: "Unlock GlassOTP to edit")
+                AccountWidgetEntity(id: $0, title: "Locked Account", subtitle: "Turn off App Lock in GlassOTP to choose an account")
             }
         }
         let all = loadAllEntities()

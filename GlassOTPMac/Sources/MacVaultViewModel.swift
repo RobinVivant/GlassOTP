@@ -333,9 +333,7 @@ final class MacVaultViewModel {
             if let migrated {
                 applyLoadedSnapshot(migrated)
             } else {
-                hasLoadError = false
-                syncError = nil
-                consumePeerRetirementNoticeIfNeeded()
+                reloadFromStore()
             }
         } catch let error as KeychainVaultError {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
@@ -360,6 +358,9 @@ final class MacVaultViewModel {
         do {
             let outcome = try store.retryPendingICloudCleanup()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if outcome != .nothingPending {
+                reloadFromStore()
+            }
             switch outcome {
             case .nothingPending:
                 break
@@ -457,13 +458,13 @@ final class MacVaultViewModel {
                 if let updatedSnapshot = outcome.snapshot {
                     applyLoadedSnapshot(updatedSnapshot)
                 } else {
-                    reloadFromStore()
                     guard copyRequestID == capturedCopyRequestID else {
                         return false
                     }
+                    reloadFromStore()
                     return fail("That account is no longer in your vault.")
                 }
-            } else {
+            } else if outcome.didMutate {
                 reloadFromStore()
             }
         } catch {
@@ -483,10 +484,14 @@ final class MacVaultViewModel {
 
         let effectiveAccount: OTPAccount
         if wasSupersededByStoreChange {
-            guard !hasLoadError,
-                  let currentAccount = accounts.first(where: { $0.id == resolvedAccount.id }),
-                  currentAccount.hasSameCredentialIdentity(as: resolvedAccount) else {
-                return false
+            guard !hasLoadError else {
+                return fail("Cannot copy codes because the existing Keychain vault could not be loaded.")
+            }
+            guard let currentAccount = accounts.first(where: { $0.id == resolvedAccount.id }) else {
+                return fail("That account is no longer in your vault.")
+            }
+            guard currentAccount.hasSameCredentialIdentity(as: resolvedAccount) else {
+                return fail("Account credentials changed. Trigger copy again for the updated code.")
             }
             effectiveAccount = resolvedAccount.type == .hotp ? resolvedAccount : currentAccount
         } else {

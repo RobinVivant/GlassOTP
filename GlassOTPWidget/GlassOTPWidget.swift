@@ -348,6 +348,7 @@ struct GlassOTPWidgetEntryView: View {
             HStack {
                 WidgetBrandBadge(item: item, size: 26)
                     .widgetAccentable()
+                    .privacySensitive(entry.isAppLocked)
 
                 Spacer()
 
@@ -393,6 +394,7 @@ struct GlassOTPWidgetEntryView: View {
                         HStack(spacing: 10) {
                             WidgetBrandBadge(item: item, size: 30)
                                 .widgetAccentable()
+                                .privacySensitive(entry.isAppLocked)
 
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(item.title)

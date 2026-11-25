@@ -581,7 +581,7 @@ struct KeychainVaultStoreTests {
         backend.items[replicaKey] = Data("corrupt-replica".utf8)
         let displayedWithBadReplica = try store.loadSnapshot()
         #expect(displayedWithBadReplica?.accounts.count == 1)
-        #expect(throws: KeychainVaultError.decodingFailed) {
+        #expect(throws: KeychainVaultError.unreadableLocalReplica) {
             _ = try store.saveMergedSnapshot(OTPVaultSnapshot(accounts: [acc1]))
         }
     }
@@ -754,7 +754,7 @@ struct KeychainVaultStoreTests {
         defaults.set(true, forKey: GlassOTPConstants.iCloudSyncPreferenceKey)
 
         // Case 1: Turn Off & Delete iCloud Copy with corrupt cloud/replica and no local copy must fail closed
-        #expect(throws: KeychainVaultError.decodingFailed) {
+        #expect(throws: KeychainVaultError.unreadableCloudVault) {
             try store.setICloudSyncEnabled(false, removeOppositeBucket: true)
         }
         #expect(backend.items[cloudKey] == badCloud)
@@ -770,7 +770,7 @@ struct KeychainVaultStoreTests {
         #expect(backend.items[cloudKey] == retiredCloudData)
         #expect(store.isICloudSyncEnabled() == false)
 
-        #expect(throws: KeychainVaultError.decodingFailed) {
+        #expect(throws: KeychainVaultError.unreadableLocalReplica) {
             try store.setICloudSyncEnabled(true, removeOppositeBucket: true)
         }
         #expect(backend.items[replicaKey] == badReplica)
@@ -780,7 +780,7 @@ struct KeychainVaultStoreTests {
         // Case 3: Remote cloud retirement when no local copy exists and replica is unreadable must fail closed and preserve replica
         defaults.set(true, forKey: GlassOTPConstants.iCloudSyncPreferenceKey)
         backend.items[cloudKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(cloudRetiredAtMillis: Date().roundedEpochMillis))
-        #expect(throws: KeychainVaultError.decodingFailed) {
+        #expect(throws: KeychainVaultError.unreadableLocalReplica) {
             _ = try store.loadSnapshot()
         }
         #expect(backend.items[replicaKey] == badReplica)
@@ -793,7 +793,7 @@ struct KeychainVaultStoreTests {
         defaults.set(true, forKey: GlassOTPConstants.iCloudSyncPreferenceKey)
         defaults.set(false, forKey: GlassOTPConstants.pendingICloudDeletePreferenceKey)
 
-        #expect(throws: KeychainVaultError.decodingFailed) {
+        #expect(throws: KeychainVaultError.unreadableCloudVault) {
             try store.setICloudSyncEnabled(false, removeOppositeBucket: true)
         }
         #expect(store.isICloudSyncEnabled() == true)
@@ -804,6 +804,16 @@ struct KeychainVaultStoreTests {
         #expect(keptRecovery?.accounts.map(\.issuer) == ["ReadableReplica"])
         #expect(store.isICloudSyncEnabled() == false)
         #expect(defaults.bool(forKey: GlassOTPConstants.pendingICloudDeletePreferenceKey) == false)
+
+        // Case 5: Corrupt replica + no cloud/local fails "Turn Off & Delete" with .unreadableLocalReplica
+        backend.items.removeValue(forKey: cloudKey)
+        backend.items.removeValue(forKey: localKey)
+        backend.items[replicaKey] = badReplica
+        defaults.set(true, forKey: GlassOTPConstants.iCloudSyncPreferenceKey)
+        #expect(throws: KeychainVaultError.unreadableLocalReplica) {
+            try store.setICloudSyncEnabled(false, removeOppositeBucket: true)
+        }
+        #expect(backend.items[replicaKey] == badReplica)
     }
 
     @Test("Interrupted legacy migration handles upsert failure, cloud delete, peer retirement, and peer merges")
@@ -1188,7 +1198,7 @@ struct KeychainVaultStoreTests {
         #expect(totpCorruptResult.didMutate == false)
         #expect(totpCorruptResult.account?.id == totpID)
 
-        #expect(throws: KeychainVaultError.decodingFailed) {
+        #expect(throws: KeychainVaultError.unreadableLocalReplica) {
             _ = try store.resolveAccountForCopy(accountID: hotpID)
         }
 
@@ -1266,12 +1276,12 @@ struct KeychainVaultStoreTests {
                 OTPVaultSnapshot(accounts: [acc], cloudSyncGenerationMillis: retireGen + 500)
             )
 
-            // Retry marks superseded, saves legacy into local, and throws on legacy delete before advancing to "replica"
+            // Retry marks superseded, advances step past cloud, saves legacy into local, and throws on legacy delete
             #expect(throws: KeychainVaultError.cloudCleanupFailed(errSecIO)) {
                 _ = try store.retryPendingICloudCleanup()
             }
             #expect(defaults.bool(forKey: GlassOTPConstants.cloudCleanupSupersededByPeerKey) == true)
-            #expect(defaults.string(forKey: GlassOTPConstants.pendingCloudRetirementStepKey) == "cloud")
+            #expect(defaults.string(forKey: GlassOTPConstants.pendingCloudRetirementStepKey) == "replica")
 
             // Failed re-enable must NOT wipe cloudCleanupSupersededByPeerKey
             backend.upsertOverrides[cloudKey] = errSecIO
@@ -1332,5 +1342,324 @@ struct KeychainVaultStoreTests {
             #expect(backend.items[replicaKey] == nil)
             #expect(defaults.bool(forKey: GlassOTPConstants.pendingICloudDeletePreferenceKey) == false)
         }
+    }
+
+    @Test("Corrupt replica with readable cloud or local vault quarantines bad bytes and recovers via off-then-on sync toggle")
+    func corruptReplicaWithActiveCloudRecoversViaOffAndOnWithQuarantine() throws {
+        for removeOpposite in [false, true] {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (procDefaults, procSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                procDefaults.removePersistentDomain(forName: procSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+            let acc = OTPAccount(issuer: "ActiveCloud", label: "a", secret: Data("111".utf8))
+            try store.saveSnapshot(OTPVaultSnapshot(accounts: [acc]))
+
+            let replicaKey = backend.key(account: GlassOTPConstants.keychainLocalReplicaAccount, synchronizable: false, accessGroup: group)
+            let quarantineKey = backend.key(account: GlassOTPConstants.keychainLocalReplicaQuarantineAccount, synchronizable: false, accessGroup: group)
+            let badReplica = Data("corrupt-replica-bytes".utf8)
+            backend.items[replicaKey] = badReplica
+
+            #expect(throws: KeychainVaultError.unreadableLocalReplica) {
+                _ = try store.mutateSnapshot { $0.folders.append(OTPFolder(name: "Fail")) }
+            }
+
+            let disabled = try store.setICloudSyncEnabled(false, removeOppositeBucket: removeOpposite)
+            #expect(disabled?.accounts.map(\.issuer) == ["ActiveCloud"])
+            if removeOpposite {
+                #expect(try store.retryPendingICloudCleanup() == .nothingPending)
+            }
+
+            let reenabled = try store.setICloudSyncEnabled(true, removeOppositeBucket: true)
+            #expect(reenabled?.accounts.map(\.issuer) == ["ActiveCloud"])
+            #expect(backend.items[quarantineKey] == badReplica)
+            let rebuiltReplica = try VaultSnapshotCoder.decode(from: #require(backend.items[replicaKey]))
+            #expect(rebuiltReplica.accounts.map(\.issuer) == ["ActiveCloud"])
+
+            let mutated = try store.mutateSnapshot { $0.folders.append(OTPFolder(name: "Recovered")) }
+            #expect(mutated.folders.map(\.name) == ["Recovered"])
+        }
+    }
+
+    @Test("Widget-first retirement and widget peer observation still recover legacy cloud and device-only accounts on main-app load")
+    func widgetFirstRetirementAndCrossProcessSupersededCleanupRecoverLegacyCloud() throws {
+        // Case 1: Widget processes retirement first when main app has pending legacy cloud AND unmigrated legacy device-only accounts
+        do {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (mainProcDefaults, mainProcSuite) = makeIsolatedDefaults()
+            let (widgetProcDefaults, widgetProcSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                mainProcDefaults.removePersistentDomain(forName: mainProcSuite)
+                widgetProcDefaults.removePersistentDomain(forName: widgetProcSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let legacyGroup = "TEAMID.com.robinvivant.glassotp"
+            let lockURL = makeLockURL()
+            defer { try? FileManager.default.removeItem(at: lockURL) }
+
+            let mainStore = KeychainVaultStore(defaults: defaults, processDefaults: mainProcDefaults, backend: backend, isAppExtension: false, lockFileURL: lockURL)
+            let widgetStore = KeychainVaultStore(defaults: defaults, processDefaults: widgetProcDefaults, backend: backend, isAppExtension: true, lockFileURL: lockURL)
+
+            let legacyCloudAcc = OTPAccount(issuer: "LegacyCloud", label: "c", secret: Data("111".utf8))
+            let legacyLocalAcc = OTPAccount(issuer: "LegacyLocalOnly", label: "l", secret: Data("222".utf8))
+            let legacySyncKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacyGroup)
+            let legacyLocalKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: false, accessGroup: legacyGroup)
+            let scopedSyncKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+
+            backend.items[legacySyncKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [legacyCloudAcc]))
+            backend.items[legacyLocalKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [legacyLocalAcc]))
+            backend.upsertOverrides[scopedSyncKey] = errSecIO
+            #expect(throws: KeychainVaultError.unexpectedStatus(errSecIO)) {
+                _ = try mainStore.loadSnapshot()
+            }
+            backend.upsertOverrides.removeValue(forKey: scopedSyncKey)
+
+            // Peer retires shared cloud before main app reloads, and widget loads first
+            backend.items[scopedSyncKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(cloudRetiredAtMillis: Date().roundedEpochMillis))
+            #expect(try widgetStore.loadSnapshot() == nil)
+            #expect(widgetStore.isICloudSyncEnabled() == false)
+            #expect(defaults.bool(forKey: GlassOTPConstants.pendingMainAppLegacyRetirementRecoveryKey) == true)
+
+            // Main app reopens -> recovers BOTH legacy cloud and legacy local-only accounts and clears both legacy items
+            let recovered = try mainStore.loadSnapshot()
+            #expect(Set(recovered?.accounts.map(\OTPAccount.issuer) ?? []) == ["LegacyCloud", "LegacyLocalOnly"])
+            #expect(backend.items[legacySyncKey] == nil)
+            #expect(backend.items[legacyLocalKey] == nil)
+            #expect(defaults.bool(forKey: GlassOTPConstants.pendingMainAppLegacyRetirementRecoveryKey) == false)
+
+            let reloadedAgain = try mainStore.loadSnapshot()
+            #expect(Set(reloadedAgain?.accounts.map(\OTPAccount.issuer) ?? []) == ["LegacyCloud", "LegacyLocalOnly"])
+        }
+
+        // Case 2: Widget observing peer re-enable must not skip main-app pending legacyGroup cleanup on retry
+        do {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (mainProcDefaults, mainProcSuite) = makeIsolatedDefaults()
+            let (widgetProcDefaults, widgetProcSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                mainProcDefaults.removePersistentDomain(forName: mainProcSuite)
+                widgetProcDefaults.removePersistentDomain(forName: widgetProcSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let legacyGroup = "TEAMID.com.robinvivant.glassotp"
+            let lockURL = makeLockURL()
+            defer { try? FileManager.default.removeItem(at: lockURL) }
+
+            let mainStore = KeychainVaultStore(defaults: defaults, processDefaults: mainProcDefaults, backend: backend, isAppExtension: false, lockFileURL: lockURL)
+            let widgetStore = KeychainVaultStore(defaults: defaults, processDefaults: widgetProcDefaults, backend: backend, isAppExtension: true, lockFileURL: lockURL)
+
+            let acc = OTPAccount(issuer: "Active", label: "a", secret: Data("111".utf8))
+            try mainStore.saveSnapshot(OTPVaultSnapshot(accounts: [acc]))
+
+            let scopedSyncKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+            let legacySyncKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacyGroup)
+            let localKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: false, accessGroup: group)
+            let pendingPrefKey = "\(GlassOTPConstants.pendingLegacyMigrationKeyPrefix).\(group).sync"
+
+            backend.upsertOverrides[scopedSyncKey] = errSecIO
+            #expect(throws: KeychainVaultError.cloudCleanupFailed(errSecIO)) {
+                try mainStore.setICloudSyncEnabled(false, removeOppositeBucket: true)
+            }
+            backend.upsertOverrides.removeValue(forKey: scopedSyncKey)
+
+            let retireGen = (defaults.object(forKey: GlassOTPConstants.lastCloudRetirementGenerationKey) as? NSNumber)?.int64Value ?? 0
+            let legacyAcc = OTPAccount(issuer: "LegacyPending", label: "l", secret: Data("222".utf8))
+            backend.items[legacySyncKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [legacyAcc]))
+            mainProcDefaults.set(legacyGroup, forKey: pendingPrefKey)
+
+            backend.items[scopedSyncKey] = try VaultSnapshotCoder.encode(
+                OTPVaultSnapshot(accounts: [acc], cloudSyncGenerationMillis: retireGen + 500)
+            )
+
+            // Widget loads and detects peer re-enable -> step stays "cloud" and superseded flag is set
+            _ = try widgetStore.loadSnapshot()
+            #expect(defaults.bool(forKey: GlassOTPConstants.cloudCleanupSupersededByPeerKey) == true)
+            #expect(defaults.string(forKey: GlassOTPConstants.pendingCloudRetirementStepKey) == "cloud")
+
+            // Main app retry cleans up pendingLegacyGroup and preserves peer cloud vault
+            let outcome = try mainStore.retryPendingICloudCleanup()
+            #expect(outcome == .localCleanupOnlyPeerSuperseded)
+            #expect(backend.items[legacySyncKey] == nil)
+            #expect(mainProcDefaults.string(forKey: pendingPrefKey) == nil)
+            let savedLocal = try VaultSnapshotCoder.decode(from: #require(backend.items[localKey]))
+            #expect(Set(savedLocal.accounts.map(\.issuer)) == ["Active", "LegacyPending"])
+        }
+    }
+
+    @Test("Turning off sync with Keep iCloud Copy does not fail or mutate iCloud when cloud is corrupt and legacy sync migration is pending")
+    func setICloudSyncEnabledOffWithPendingLegacyDoesNotMutateOrFailOnCorruptCloud() throws {
+        let (defaults, suite) = makeIsolatedDefaults()
+        let (procDefaults, procSuite) = makeIsolatedDefaults()
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            procDefaults.removePersistentDomain(forName: procSuite)
+        }
+
+        let backend = InMemoryKeychainBackend()
+        let group = backend.accessGroup!
+        let legacyGroup = "TEAMID.com.robinvivant.glassotp"
+        let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+        let scopedSyncKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+        let legacySyncKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: legacyGroup)
+        let localKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: false, accessGroup: group)
+        let pendingPrefKey = "\(GlassOTPConstants.pendingLegacyMigrationKeyPrefix).\(group).sync"
+
+        let badCloud = Data("corrupt-shared-cloud".utf8)
+        let legacyAcc = OTPAccount(issuer: "LegacySync", label: "s", secret: Data("999".utf8))
+        let legacyData = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [legacyAcc]))
+        backend.items[scopedSyncKey] = badCloud
+        backend.items[legacySyncKey] = legacyData
+        procDefaults.set(legacyGroup, forKey: pendingPrefKey)
+
+        let kept = try store.setICloudSyncEnabled(false, removeOppositeBucket: false)
+        #expect(kept?.accounts.map(\.issuer) == ["LegacySync"])
+        #expect(store.isICloudSyncEnabled() == false)
+        #expect(backend.items[scopedSyncKey] == badCloud)
+        #expect(backend.items[legacySyncKey] == legacyData)
+        let persistedLocal = try VaultSnapshotCoder.decode(from: #require(backend.items[localKey]))
+        #expect(persistedLocal.accounts.map(\.issuer) == ["LegacySync"])
+    }
+
+    @Test("Replica cleanup fails closed on transient replica read error and re-retires stale active peer overwrites")
+    func replicaCleanupHandlesTransientReadErrorAndStalePeerOverwrite() throws {
+        // Case 1: Transient replica read error must not authorize deleting unreadable replica bytes
+        do {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (procDefaults, procSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                procDefaults.removePersistentDomain(forName: procSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+            let acc = OTPAccount(issuer: "GitHub", label: "u", secret: Data("111".utf8))
+            try store.saveSnapshot(OTPVaultSnapshot(accounts: [acc]))
+
+            let cloudKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+            let replicaKey = backend.key(account: GlassOTPConstants.keychainLocalReplicaAccount, synchronizable: false, accessGroup: group)
+            let badReplica = Data("corrupt-replica".utf8)
+
+            backend.upsertOverrides[cloudKey] = errSecIO
+            #expect(throws: KeychainVaultError.cloudCleanupFailed(errSecIO)) {
+                try store.setICloudSyncEnabled(false, removeOppositeBucket: true)
+            }
+            backend.upsertOverrides.removeValue(forKey: cloudKey)
+            backend.items[replicaKey] = badReplica
+            backend.readOverrides[replicaKey] = errSecIO
+
+            #expect(throws: KeychainVaultError.cloudCleanupFailed(errSecIO)) {
+                _ = try store.retryPendingICloudCleanup()
+            }
+            #expect(backend.items[replicaKey] == badReplica)
+            #expect(defaults.bool(forKey: GlassOTPConstants.pendingICloudDeletePreferenceKey) == true)
+
+            backend.readOverrides.removeValue(forKey: replicaKey)
+            let outcome = try store.retryPendingICloudCleanup()
+            #expect(outcome == .clearedCloudCopy)
+            #expect(backend.items[replicaKey] == badReplica)
+        }
+
+        // Case 2: Replica-step retry observing stale active peer vault (generation nil or <= savedGen) re-retires immediately
+        do {
+            let (defaults, suite) = makeIsolatedDefaults()
+            let (procDefaults, procSuite) = makeIsolatedDefaults()
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                procDefaults.removePersistentDomain(forName: procSuite)
+            }
+
+            let backend = InMemoryKeychainBackend()
+            let group = backend.accessGroup!
+            let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: makeLockURL())
+
+            let acc = OTPAccount(issuer: "StalePeer", label: "p", secret: Data("222".utf8))
+            try store.saveSnapshot(OTPVaultSnapshot(accounts: [acc]))
+
+            let cloudKey = backend.key(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: group)
+            let replicaKey = backend.key(account: GlassOTPConstants.keychainLocalReplicaAccount, synchronizable: false, accessGroup: group)
+
+            backend.deleteOverrides[replicaKey] = errSecInteractionNotAllowed
+            #expect(throws: KeychainVaultError.cloudCleanupFailed(errSecInteractionNotAllowed)) {
+                try store.setICloudSyncEnabled(false, removeOppositeBucket: true)
+            }
+            backend.deleteOverrides.removeValue(forKey: replicaKey)
+
+            // Stale peer overwrites cloud with active vault (nil generation)
+            backend.items[cloudKey] = try VaultSnapshotCoder.encode(OTPVaultSnapshot(accounts: [acc], cloudSyncGenerationMillis: nil))
+
+            let outcome = try store.retryPendingICloudCleanup()
+            #expect(outcome == .clearedCloudCopy)
+            let reRetired = try VaultSnapshotCoder.decode(from: #require(backend.items[cloudKey]))
+            #expect(reRetired.accounts.isEmpty)
+            #expect(reRetired.cloudRetiredAtMillis != nil)
+        }
+    }
+
+    @Test("TOTP copy does not wait behind in-process NSLock contention when another thread waits on flock")
+    func nonBlockingTOTPCopyDoesNotWaitOnInProcessNSLockContention() throws {
+        let (defaults, suite) = makeIsolatedDefaults()
+        let (procDefaults, procSuite) = makeIsolatedDefaults()
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            procDefaults.removePersistentDomain(forName: procSuite)
+        }
+
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        let store = KeychainVaultStore(defaults: defaults, processDefaults: procDefaults, backend: backend, lockFileURL: lockURL, lockTimeout: 2.0)
+
+        let totpID = UUID()
+        let totpAcc = OTPAccount(id: totpID, issuer: "FastTOTP", label: "f", secret: Data("111".utf8), type: .totp)
+        try store.saveSnapshot(OTPVaultSnapshot(accounts: [totpAcc]))
+
+        let fd = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+        #expect(fd >= 0)
+        #expect(flock(fd, LOCK_EX | LOCK_NB) == 0)
+        var lockReleased = false
+        defer {
+            if !lockReleased {
+                _ = flock(fd, LOCK_UN)
+                close(fd)
+            }
+        }
+
+        let started = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            started.signal()
+            _ = try? store.loadSnapshot()
+            finished.signal()
+        }
+        started.wait()
+        usleep(80_000)
+
+        let copyStart = Date()
+        let result = try store.resolveAccountForCopy(accountID: totpID)
+        let copyElapsed = Date().timeIntervalSince(copyStart)
+        #expect(copyElapsed < 0.5)
+        #expect(result.didMutate == false)
+        #expect(result.account?.id == totpID)
+
+        _ = flock(fd, LOCK_UN)
+        close(fd)
+        lockReleased = true
+        finished.wait()
     }
 }

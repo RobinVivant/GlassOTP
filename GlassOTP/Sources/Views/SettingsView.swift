@@ -322,7 +322,7 @@ struct SettingsView: View {
                         guideStep(
                             number: "3",
                             title: "Customize Account & Privacy Mode",
-                            body: "Long-press a GlassOTP widget > Edit Widget to pick a specific account or turn on Tap to Reveal so codes stay masked until tapped. Tapping Copy on Home Screen or Lock Screen widgets copies via Universal Clipboard when enabled."
+                            body: "Long-press a GlassOTP widget > Edit Widget to pick a specific account or turn on Tap to Reveal so codes stay masked until tapped. Tapping Copy on Home Screen or Lock Screen widgets copies via Universal Clipboard when enabled. When App Lock is enabled, the widget account picker stays hidden until App Lock is turned off."
                         )
                         guideStep(
                             number: "4",

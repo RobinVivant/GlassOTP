@@ -70,9 +70,17 @@ final class VaultViewModel {
 
     var revealedAccountIDs: Set<UUID> = []
 
+    private struct PendingForegroundCopy {
+        let requestID: UInt64
+        let lockEpoch: UInt64
+        let account: OTPAccount
+        let reservedHOTPCode: String?
+        let reservedHOTPFormattedCode: String?
+    }
+
     private let store: KeychainVaultStore
     private var toastDismissTask: Task<Void, Never>?
-    @ObservationIgnored private var pendingForegroundCopyCode: String?
+    @ObservationIgnored private var pendingForegroundCopy: PendingForegroundCopy?
     @ObservationIgnored private var pendingIncomingURL: URL?
     @ObservationIgnored private var accountTombstones: [OTPTombstone] = []
     @ObservationIgnored private var folderTombstones: [OTPTombstone] = []
@@ -210,8 +218,10 @@ final class VaultViewModel {
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             if let migrated {
                 applySnapshotToMemory(migrated)
+                hasLoadError = false
+            } else {
+                reloadFromStore()
             }
-            hasLoadError = false
             WidgetCenter.shared.reloadAllTimelines()
         } catch let error as KeychainVaultError {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
@@ -239,6 +249,9 @@ final class VaultViewModel {
         do {
             let outcome = try store.retryPendingICloudCleanup()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if outcome != .nothingPending {
+                reloadFromStore()
+            }
             switch outcome {
             case .nothingPending:
                 break
@@ -282,12 +295,37 @@ final class VaultViewModel {
     }
 
     func commitPendingForegroundCopyIfNeeded() {
-        guard let pending = pendingForegroundCopyCode else { return }
-        pendingForegroundCopyCode = nil
-        OTPClipboardWriter.copyOTP(pending)
+        guard let pending = pendingForegroundCopy else { return }
+        pendingForegroundCopy = nil
+        guard !hasLoadError,
+              pending.requestID == copyRequestID,
+              pending.lockEpoch == lockEpoch,
+              let currentAccount = accounts.first(where: { $0.id == pending.account.id }),
+              currentAccount.hasSameCredentialIdentity(as: pending.account),
+              currentAccount.isSupportedAlgorithm else {
+            return
+        }
+
+        let now = Date()
+        let code: String
+        let formattedCode: String
+        if currentAccount.type == .hotp,
+           let reservedCode = pending.reservedHOTPCode,
+           let reservedFormatted = pending.reservedHOTPFormattedCode {
+            code = reservedCode
+            formattedCode = reservedFormatted
+        } else {
+            let generated = OTPGenerator.snapshot(for: currentAccount, at: now)
+            code = generated.code
+            formattedCode = generated.formattedCode
+        }
+
+        OTPClipboardWriter.copyOTP(code)
         let generator = UINotificationFeedbackGenerator()
         generator.prepare()
         generator.notificationOccurred(.success)
+        SharedWidgetStateStore.recordCopy(accountID: currentAccount.id, at: now)
+        showToast(title: currentAccount.displayTitle, formattedCode: formattedCode)
     }
 
     func copyCode(for account: OTPAccount, at date: Date? = nil, reloadWidgets: Bool = false) {
@@ -331,14 +369,14 @@ final class VaultViewModel {
                         consumePeerRetirementNoticeIfNeeded()
                     }
                 } else {
-                    reloadFromStore()
                     guard copyRequestID == capturedCopyRequestID, lockEpoch == capturedLockEpoch else {
                         return
                     }
+                    reloadFromStore()
                     alertMessage = "That account is no longer in your vault."
                     return
                 }
-            } else {
+            } else if outcome.didMutate {
                 reloadFromStore()
             }
 
@@ -352,9 +390,13 @@ final class VaultViewModel {
 
             let effectiveAccount: OTPAccount
             if wasSupersededByStoreChange {
-                guard !hasLoadError,
-                      let currentAccount = accounts.first(where: { $0.id == resolvedAccount.id }),
-                      currentAccount.hasSameCredentialIdentity(as: resolvedAccount) else {
+                guard !hasLoadError else { return }
+                guard let currentAccount = accounts.first(where: { $0.id == resolvedAccount.id }) else {
+                    alertMessage = "That account is no longer in your vault."
+                    return
+                }
+                guard currentAccount.hasSameCredentialIdentity(as: resolvedAccount) else {
+                    alertMessage = "Account credentials changed. Tap again to copy the updated code."
                     return
                 }
                 effectiveAccount = resolvedAccount.type == .hotp ? resolvedAccount : currentAccount
@@ -376,7 +418,13 @@ final class VaultViewModel {
             generator.notificationOccurred(.success)
 
             if UIApplication.shared.applicationState != .active {
-                pendingForegroundCopyCode = snapshot.code
+                pendingForegroundCopy = PendingForegroundCopy(
+                    requestID: capturedCopyRequestID,
+                    lockEpoch: capturedLockEpoch,
+                    account: effectiveAccount,
+                    reservedHOTPCode: effectiveAccount.type == .hotp ? snapshot.code : nil,
+                    reservedHOTPFormattedCode: effectiveAccount.type == .hotp ? snapshot.formattedCode : nil
+                )
             }
 
             SharedWidgetStateStore.recordCopy(accountID: effectiveAccount.id, at: generationDate)
@@ -679,7 +727,7 @@ final class VaultViewModel {
     func dismissSensitivePresentationsForLock() {
         lockEpoch &+= 1
         revealedAccountIDs.removeAll()
-        pendingForegroundCopyCode = nil
+        pendingForegroundCopy = nil
         toastDismissTask?.cancel()
         copiedToast = nil
         qrDetailAccount = nil
