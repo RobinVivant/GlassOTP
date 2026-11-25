@@ -26,7 +26,7 @@ V11_DATA_URL = "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/_data/simple-i
 SERVICES = [
     # --- Dev & Code ---
     ("github", "GitHub", None, "dev", "github.com", ["github", "github.com", "gh"]),
-    ("gitlab", "GitLab", None, "dev", "gitlab.com", ["gitlab", "gitlab.com", "gitlab.vero.io"]),
+    ("gitlab", "GitLab", None, "dev", "gitlab.com", ["gitlab", "gitlab.com"]),
     ("bitbucket", "Bitbucket", None, "dev", "bitbucket.org", ["bitbucket", "bitbucket.org"]),
     ("npm", "npm", None, "dev", "npmjs.com", ["npm", "npmjs", "npmjs.com"]),
     ("pypi", "PyPI", None, "dev", "pypi.org", ["pypi", "pypi.org", "python package index"]),
@@ -321,7 +321,6 @@ WEB_ONLY_SERVICES = [
     ("franceconnect", "FranceConnect", "000091", "personal", "franceconnect.gouv.fr", ["franceconnect", "france connect"]),
     ("swile", "Swile", "222222", "work", "swile.co", ["swile"]),
     ("alan", "Alan", "3E64FF", "work", "alan.com", ["alan", "alan.eu"]),
-    ("vero", "VERO", "00A79D", "work", "vero.co", ["vero", "vero.io", "verolabs", "ojingo"]),
     ("leboncoin", "Leboncoin", "FF6E14", "shopping", "leboncoin.fr", ["leboncoin"]),
     ("blablacar", "BlaBlaCar", "00AFF5", "shopping", "blablacar.fr", ["blablacar"]),
     ("free", "Free", "CD1E25", "personal", "free.fr", ["freebox", "mobile.free.fr"]),

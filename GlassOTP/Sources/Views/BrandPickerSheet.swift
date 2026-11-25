@@ -92,7 +92,7 @@ struct BrandPickerSheet: View {
                 .padding(.horizontal, 4)
 
             HStack(spacing: 10) {
-                TextField("e.g. boursobank.com or vero.co", text: $customDomain)
+                TextField("e.g. fastmail.com or example.com", text: $customDomain)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)

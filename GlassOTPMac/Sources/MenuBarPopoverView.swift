@@ -12,6 +12,7 @@ struct MenuBarPopoverView: View {
     @State private var recordingAccountID: UUID?
     @State private var importError: String?
     @State private var pendingImportData: (url: URL, data: Data)?
+    @State private var detectedEncryptedFormat: String?
     @State private var importPassword = ""
     @State private var showingPasswordPrompt = false
 
@@ -539,14 +540,14 @@ struct MenuBarPopoverView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Decrypt Backup")
                 .font(.headline)
-            Text(filename)
+            Text(detectedEncryptedFormat.map { "\($0) • \(filename)" } ?? filename)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             SecureField("Backup password", text: $importPassword)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit {
-                    runBackupImport(data: data, filename: filename)
+                    runBackupImport(data: data, password: importPassword, filename: filename)
                 }
 
             if let importError {
@@ -559,12 +560,13 @@ struct MenuBarPopoverView: View {
                 Button("Cancel") {
                     showingPasswordPrompt = false
                     pendingImportData = nil
+                    detectedEncryptedFormat = nil
                     importPassword = ""
                     importError = nil
                 }
                 Spacer()
                 Button("Import") {
-                    runBackupImport(data: data, filename: filename)
+                    runBackupImport(data: data, password: importPassword, filename: filename)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(importPassword.isEmpty)
@@ -590,29 +592,47 @@ struct MenuBarPopoverView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.message = "Select an encrypted .otpauthdb, .otpauth, or .glassotp backup."
-        if panel.runModal() == .OK, let url = panel.url, let data = try? Data(contentsOf: url) {
+        panel.message = "Select an export from OTP Auth (.otpauthdb/.otpauth), 2FAS (.2fas), Aegis/Bitwarden/Raivo/Stratum/andOTP/FreeOTP+/Proton (.json), Apple Passwords/Bitwarden/1Password (.csv), Ente Auth/URI (.txt), or .glassotp."
+        guard panel.runModal() == .OK, let url = panel.url, let data = try? Data(contentsOf: url) else {
+            return
+        }
+
+        let filename = url.lastPathComponent
+        switch VaultImporter.inspect(data: data, filenameHint: filename) {
+        case .plaintext:
+            vault.showingSettings = false
+            runBackupImport(data: data, password: nil, filename: filename)
+        case .encrypted(let hint):
+            detectedEncryptedFormat = hint
             pendingImportData = (url, data)
             importPassword = ""
             importError = nil
             vault.showingSettings = false
             showingPasswordPrompt = true
+        case .unsupportedEncrypted(_, let guidance):
+            vault.alertMessage = guidance
+        case .unrecognized:
+            vault.alertMessage = OTPImportError.invalidFileFormat.errorDescription
         }
     }
 
-    private func runBackupImport(data: Data, filename: String) {
-        let password = importPassword
+    private func runBackupImport(data: Data, password: String?, filename: String) {
         Task {
             let outcome = await vault.importBackupFile(data: data, password: password, filename: filename)
             switch outcome {
             case .success(let summary):
                 showingPasswordPrompt = false
                 pendingImportData = nil
+                detectedEncryptedFormat = nil
                 importPassword = ""
                 importError = nil
                 vault.alertMessage = summary
             case .failure(let error):
-                importError = error.localizedDescription
+                if showingPasswordPrompt {
+                    importError = error.localizedDescription
+                } else {
+                    vault.alertMessage = error.localizedDescription
+                }
             }
         }
     }
