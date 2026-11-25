@@ -13,17 +13,17 @@ struct PinnedOTPCardView: View {
         Button {
             vault.copyCode(for: account)
         } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    BrandAvatarView(account: account, size: 32, logoRevision: vault.logoCacheRevision)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    BrandAvatarView(account: account, size: 26, logoRevision: vault.logoCacheRevision)
                         .equatable()
                     Spacer()
                     PinnedOTPLiveRingView(account: account)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     Text(account.displayTitle)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.caption.weight(.semibold))
                         .lineLimit(1)
                     if !account.displaySubtitle.isEmpty {
                         Text(account.displaySubtitle)
@@ -33,12 +33,12 @@ struct PinnedOTPCardView: View {
                     }
                 }
 
-                OTPLiveCodeText(account: account, fontSize: 22, isVisible: isVisible)
+                OTPLiveCodeText(account: account, fontSize: 19, isVisible: isVisible)
             }
-            .padding(14)
-            .frame(width: 170, alignment: .leading)
+            .padding(10)
+            .frame(width: 148, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(.ultraThinMaterial)
                     .overlay(
                         LinearGradient(
@@ -46,11 +46,11 @@ struct PinnedOTPCardView: View {
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     )
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(.white.opacity(0.18), lineWidth: 1)
             )
         }
@@ -66,46 +66,44 @@ struct OTPCardView: View {
     var body: some View {
         let isVisible = vault.isCodeVisible(for: account.id)
 
-        HStack(spacing: 14) {
-            BrandAvatarView(account: account, size: 46, logoRevision: vault.logoCacheRevision)
+        HStack(spacing: 10) {
+            BrandAvatarView(account: account, size: 36, logoRevision: vault.logoCacheRevision)
                 .equatable()
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
                     Text(account.displayTitle)
-                        .font(.headline)
+                        .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
 
                     if account.isPinned {
                         Image(systemName: "pin.fill")
-                            .font(.caption2)
+                            .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(Color.accentColor)
                     }
+                }
 
-                    if let folderName {
-                        Text(folderName)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(.quaternary.opacity(0.6), in: Capsule())
-                            .lineLimit(1)
+                if !account.displaySubtitle.isEmpty || folderName != nil {
+                    HStack(spacing: 4) {
+                        if !account.displaySubtitle.isEmpty {
+                            Text(account.displaySubtitle)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let folderName {
+                            Text(account.displaySubtitle.isEmpty ? folderName : "• \(folderName)")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.tertiary)
+                                .layoutPriority(account.displaySubtitle.isEmpty ? 0 : 1)
+                        }
                     }
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 }
-
-                if !account.displaySubtitle.isEmpty {
-                    Text(account.displaySubtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                OTPLiveCodeText(account: account, fontSize: 28, isVisible: isVisible)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: 8)
-
-            OTPLiveTrailingControl(
+            OTPLiveRightCluster(
                 account: account,
                 isVisible: isVisible,
                 hideCodesInApp: vault.hideCodesInApp,
@@ -113,15 +111,17 @@ struct OTPCardView: View {
                 onToggleReveal: { vault.toggleReveal(for: account.id) }
             )
         }
-        .padding(14)
+        .frame(minHeight: 37)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.ultraThinMaterial)
         )
         .overlay {
-            OTPExpiringBorderOverlay(account: account, cornerRadius: 22)
+            OTPExpiringBorderOverlay(account: account, cornerRadius: 16)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture {
             if vault.hideCodesInApp && !vault.revealedAccountIDs.contains(account.id) {
                 vault.toggleReveal(for: account.id)
@@ -198,12 +198,12 @@ private struct PinnedOTPLiveRingView: View {
             CountdownRingView(
                 remainingSeconds: timing.remainingSeconds,
                 progress: timing.progress,
-                size: 28,
+                size: 24,
                 period: timing.period
             )
         } else {
             Image(systemName: "number.circle.fill")
-                .font(.title3)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
     }
@@ -256,7 +256,7 @@ private struct OTPLiveCodeText: View {
     }
 }
 
-private struct OTPLiveTrailingControl: View {
+private struct OTPLiveRightCluster: View {
     @Environment(OTPClock.self) private var clock
     let account: OTPAccount
     let isVisible: Bool
@@ -265,44 +265,51 @@ private struct OTPLiveTrailingControl: View {
     let onToggleReveal: () -> Void
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        HStack(spacing: 8) {
             if account.type == .totp {
                 let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
                 let isExpiring = timing.remainingSeconds <= 5
 
+                codeStack(
+                    codeText: isVisible
+                        ? OTPGenerator.formatCode(
+                            OTPGenerator.generateHOTP(
+                                secret: account.secret,
+                                counter: timing.counter,
+                                digits: account.digits,
+                                algorithm: account.algorithm
+                            )
+                        )
+                        : "••• •••",
+                    nextCodeText: (isVisible && isExpiring)
+                        ? OTPGenerator.formatCode(
+                            OTPGenerator.generateHOTP(
+                                secret: account.secret,
+                                counter: timing.counter &+ 1,
+                                digits: account.digits,
+                                algorithm: account.algorithm
+                            )
+                        )
+                        : nil,
+                    isExpiring: isExpiring
+                )
+
                 CountdownRingView(
                     remainingSeconds: timing.remainingSeconds,
                     progress: timing.progress,
-                    size: 36,
+                    size: 30,
                     period: timing.period
                 )
-
-                let nextText: String = {
-                    guard isVisible, isExpiring else {
-                        return account.digits == 8 ? "0000 0000" : "000 000"
-                    }
-                    let next = OTPGenerator.generateHOTP(
-                        secret: account.secret,
-                        counter: timing.counter &+ 1,
-                        digits: account.digits,
-                        algorithm: account.algorithm
-                    )
-                    return OTPGenerator.formatCode(next)
-                }()
-
-                Text("→ \(nextText)")
-                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .foregroundStyle(.secondary)
-                    .opacity(isVisible && isExpiring ? 1 : 0)
-                    .accessibilityHidden(!(isVisible && isExpiring))
             } else {
+                let formatted = isVisible
+                    ? OTPGenerator.snapshot(for: account, at: Date(), includeNextCode: false).formattedCode
+                    : "••• •••"
+                codeStack(codeText: formatted, nextCodeText: nil, isExpiring: false)
+
                 Button(action: onIncrementHOTP) {
                     Image(systemName: "arrow.clockwise")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 34, height: 34)
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 30, height: 30)
                 }
                 .buttonStyle(.glass)
                 .accessibilityLabel("Next HOTP Counter")
@@ -311,13 +318,34 @@ private struct OTPLiveTrailingControl: View {
             if hideCodesInApp {
                 Button(action: onToggleReveal) {
                     Image(systemName: isVisible ? "eye.slash" : "eye")
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .frame(minWidth: 58, alignment: .trailing)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func codeStack(codeText: String, nextCodeText: String?, isExpiring: Bool) -> some View {
+        VStack(alignment: .trailing, spacing: 1) {
+            Text(codeText)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .contentTransition(.numericText())
+                .foregroundStyle(isExpiring ? Color.red : Color.primary)
+
+            if let nextCodeText {
+                Text("→ \(nextCodeText)")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(minHeight: 37, alignment: .trailing)
     }
 }
 

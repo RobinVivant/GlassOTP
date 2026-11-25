@@ -21,7 +21,7 @@ struct FoldersView: View {
             AmbientGlassBackground()
 
             ScrollView {
-                VStack(spacing: 12) {
+                VStack(spacing: 8) {
                     folderRow(
                         title: "All Accounts",
                         subtitle: "\(vault.accounts.count) total tokens",
@@ -75,8 +75,8 @@ struct FoldersView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
             }
         }
         .navigationTitle("Folders")
@@ -158,35 +158,36 @@ struct FoldersView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(tint.opacity(0.18))
-                        .frame(width: 42, height: 42)
+                        .frame(width: 34, height: 34)
                     Image(systemName: symbol)
-                        .font(.body.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(tint)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     Text(title)
-                        .font(.headline)
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                     Text(subtitle)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(.caption2.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
-            .padding(14)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(.white.opacity(0.12), lineWidth: 1)
             )
         }

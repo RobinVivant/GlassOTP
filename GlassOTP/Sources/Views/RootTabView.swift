@@ -128,7 +128,7 @@ private struct SearchVaultView: View {
                 ContentUnavailableView.search(text: query)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 12) {
+                    LazyVStack(spacing: 7) {
                         ForEach(results) { account in
                             OTPCardView(
                                 account: account,
@@ -136,8 +136,8 @@ private struct SearchVaultView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
                 }
             }
         }

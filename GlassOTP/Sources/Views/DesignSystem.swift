@@ -365,21 +365,22 @@ struct CountdownRingView: View {
     }
 
     var body: some View {
+        let strokeWidth = max(2.2, size * 0.095)
         ZStack {
             Circle()
-                .stroke(.secondary.opacity(0.22), lineWidth: 3.2)
+                .stroke(.secondary.opacity(0.22), lineWidth: strokeWidth)
 
             Circle()
                 .trim(from: 0, to: max(0.02, min(1, progress)))
                 .stroke(
                     ringColor,
-                    style: StrokeStyle(lineWidth: 3.2, lineCap: .round)
+                    style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
                 .animation(remainingSeconds > period - 0.5 ? nil : .linear(duration: 0.98), value: progress)
 
             Text("\(max(0, Int(ceil(remainingSeconds))))")
-                .font(.system(size: size * 0.33, weight: .bold, design: .rounded))
+                .font(.system(size: size * 0.35, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(remainingSeconds <= 5 ? ringColor : .secondary)
         }

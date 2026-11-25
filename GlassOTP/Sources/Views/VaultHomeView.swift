@@ -151,7 +151,7 @@ struct VaultHomeView: View {
 
     private var populatedVaultView: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 12) {
                 if !vault.folders.isEmpty {
                     folderFilterBar
                 }
@@ -166,18 +166,18 @@ struct VaultHomeView: View {
 
                 accountsSection
             }
-            .padding(.vertical, 10)
+            .padding(.vertical, 6)
         }
     }
 
     private var autoCategorizeBanner: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Image(systemName: "wand.and.stars")
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
-                    .frame(width: 32, height: 32)
-                    .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .frame(width: 28, height: 28)
+                    .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 Text("Organize & Match Logos")
                     .font(.subheadline.weight(.semibold))
@@ -193,17 +193,17 @@ struct VaultHomeView: View {
                     Image(systemName: "xmark")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 24, height: 24)
+                        .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Dismiss suggestion")
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Text("Sort into smart categories & fetch icons")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(1)
 
                 Spacer(minLength: 4)
 
@@ -214,27 +214,27 @@ struct VaultHomeView: View {
                 .buttonStyle(.glassProminent)
             }
         }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(11)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(Color.accentColor.opacity(0.28), lineWidth: 1)
         )
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 14)
     }
 
     private var folderFilterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            GlassEffectContainer(spacing: 10) {
-                HStack(spacing: 10) {
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
                     filterChip(title: "All", symbol: "tray.full.fill", folderID: nil)
 
                     ForEach(vault.folders) { folder in
                         filterChip(title: folder.name, symbol: folder.symbolName, folderID: folder.id)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 2)
             }
         }
     }
@@ -247,10 +247,10 @@ struct VaultHomeView: View {
             }
         } label: {
             Label(title, systemImage: symbol)
-                .font(.subheadline.weight(isSelected ? .semibold : .medium))
+                .font(.caption.weight(isSelected ? .semibold : .medium))
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
                 .glassEffect(
                     isSelected
                         ? .regular.tint(Color.accentColor).interactive()
@@ -263,26 +263,26 @@ struct VaultHomeView: View {
     }
 
     private var pinnedSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("PINNED")
                 .font(.caption.weight(.bold))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 18)
+                .padding(.horizontal, 16)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
                     ForEach(vault.pinnedAccounts) { account in
                         PinnedOTPCardView(account: account)
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 14)
             }
         }
     }
 
     private var accountsSection: some View {
         let displayed = vault.filteredAccounts
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(vault.selectedFolderID == nil ? "ALL CODES" : (vault.folderName(for: vault.selectedFolderID)?.uppercased() ?? "FOLDER"))
                     .font(.caption.weight(.bold))
@@ -292,7 +292,7 @@ struct VaultHomeView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, 16)
 
             if displayed.isEmpty {
                 ContentUnavailableView(
@@ -302,7 +302,7 @@ struct VaultHomeView: View {
                 )
                 .padding(.top, 20)
             } else {
-                LazyVStack(spacing: 12) {
+                LazyVStack(spacing: 7) {
                     ForEach(displayed) { account in
                         OTPCardView(
                             account: account,
@@ -310,8 +310,8 @@ struct VaultHomeView: View {
                         )
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 16)
             }
         }
     }

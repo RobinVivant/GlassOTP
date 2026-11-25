@@ -292,7 +292,7 @@ struct OTPAuthImportSheet: View {
             .padding(18)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
-            LazyVStack(spacing: 10) {
+            LazyVStack(spacing: 6) {
                 ForEach(decryptedAccounts) { account in
                     let isDuplicate = existing.contains(account.fingerprint)
                     let isSelected = selectedAccountIDs.contains(account.id)
@@ -303,12 +303,12 @@ struct OTPAuthImportSheet: View {
                             selectedAccountIDs.insert(account.id)
                         }
                     } label: {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 10) {
                             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                                 .font(.title3)
                                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
 
-                            BrandAvatarView(account: account, size: 38, logoRevision: vault.logoCacheRevision)
+                            BrandAvatarView(account: account, size: 32, logoRevision: vault.logoCacheRevision)
                                 .equatable()
 
                             VStack(alignment: .leading, spacing: 2) {
@@ -337,8 +337,9 @@ struct OTPAuthImportSheet: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        .padding(12)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .buttonStyle(.plain)
                 }

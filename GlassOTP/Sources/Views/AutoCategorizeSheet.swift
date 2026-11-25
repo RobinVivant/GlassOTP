@@ -41,9 +41,9 @@ struct AutoCategorizeSheet: View {
                 AmbientGlassBackground()
 
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
+                    LazyVStack(alignment: .leading, spacing: 6) {
                         summaryCard
-                            .padding(.bottom, 8)
+                            .padding(.bottom, 6)
 
                         ForEach(groupedCategories, id: \.category) { group in
                             Section {
@@ -55,7 +55,7 @@ struct AutoCategorizeSheet: View {
                             }
                         }
                     }
-                    .padding(16)
+                    .padding(14)
                 }
             }
             .navigationTitle("Auto-Categorize & Logos")
@@ -166,7 +166,7 @@ struct AutoCategorizeSheet: View {
 
             BrandAvatarView(
                 account: item.account,
-                size: 38,
+                size: 32,
                 logoRevision: vault.logoCacheRevision
             )
             .equatable()
@@ -230,11 +230,11 @@ struct AutoCategorizeSheet: View {
             .fixedSize()
             .accessibilityLabel("Change category for \(item.account.displayTitle), currently \(currentCategory.displayName)")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(.white.opacity(0.10), lineWidth: 1)
         )
     }
