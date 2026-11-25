@@ -5,8 +5,8 @@ All notable changes to GlassOTP are documented in this file.
 ## [1.2.0] - 2026-11-25
 
 ### Added
-- Interprocess POSIX file locking (`flock`, fail-closed on iOS mutations), `ThisDeviceOnly` local replica (`local-replica-v1`), signed iCloud retirement markers (`icloud-sync-marker-v1`), fractional-second ISO-8601 serialization (`VaultSnapshotCoder`), canonical tie-breakers, `tombstoneHorizon` tracking, one-time unscoped legacy migration, and injectable `KeychainBackend` unit tests in `KeychainVaultStore`.
-- True App Lock gating on widgets (`SharedSecurityPreferences.effectiveAppLockEnabled` + `isDiscoverable = false` + widget deep-link routing into locked GlassOTP), plus device-owner authentication before disabling App Lock.
+- Interprocess POSIX file locking (`flock`, fail-closed on iOS mutations), `ThisDeviceOnly` local replica (`local-replica-v1`), single-record synchronizable empty retirement records (`cloudRetiredAtMillis` / `cloudSyncGenerationMillis`), integer-millisecond ISO-8601 serialization (`VaultSnapshotCoder`), canonical tie-breakers, ID-retained deletion tombstones (without horizon pruning), explicit-group legacy migration, and injectable `KeychainBackend` unit tests in `KeychainVaultStore`.
+- True App Lock gating on widgets (`SharedSecurityPreferences.effectiveAppLockEnabled` + `isDiscoverable = false` + widget deep-link routing into locked GlassOTP), checks device authentication availability to enable App Lock, and requires device-owner authentication before disabling App Lock.
 - Google Favicons disclosures across `SettingsView`, `AutoCategorizeSheet`, `README.md`, and `SECURITY.md`, inline modal error banners, folder-only `.glassotp` restore support, local-only `BrandPickerSheet` grid selection, and `"Unsupported"` status handling for legacy MD5 accounts.
 - Actionable `"Retry Deleting iCloud Copy"` control (reactive on `VaultViewModel.hasPendingICloudCleanup`) when turning off iCloud Keychain sync encounters a cloud cleanup error.
 

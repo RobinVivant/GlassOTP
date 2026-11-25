@@ -120,13 +120,14 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
     public var createdAt: Date
     public var updatedAt: Date
     public var counterResetAt: Date?
+    public var credentialGeneration: UInt64
     public var customBrandSlug: String?
     public var customLogoDomain: String?
 
     enum CodingKeys: String, CodingKey {
         case id, issuer, label, secret, type, algorithm, digits, period, counter
         case folderID, isPinned, sortOrder, createdAt, updatedAt, counterResetAt
-        case customBrandSlug, customLogoDomain
+        case credentialGeneration, customBrandSlug, customLogoDomain
     }
 
     public init(
@@ -145,6 +146,7 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         counterResetAt: Date? = nil,
+        credentialGeneration: UInt64 = 0,
         customBrandSlug: String? = nil,
         customLogoDomain: String? = nil
     ) {
@@ -163,6 +165,7 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.counterResetAt = counterResetAt
+        self.credentialGeneration = credentialGeneration
         self.customBrandSlug = customBrandSlug
         self.customLogoDomain = customLogoDomain
     }
@@ -186,6 +189,7 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         self.createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? .distantPast
         self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .distantPast
         self.counterResetAt = try container.decodeIfPresent(Date.self, forKey: .counterResetAt)
+        self.credentialGeneration = try container.decodeIfPresent(UInt64.self, forKey: .credentialGeneration) ?? 0
         self.customBrandSlug = try container.decodeIfPresent(String.self, forKey: .customBrandSlug)
         self.customLogoDomain = try container.decodeIfPresent(String.self, forKey: .customLogoDomain)
     }
@@ -194,25 +198,32 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         algorithm != .md5
     }
 
-    internal var mergeTieBreakKey: String {
-        let secretDigest = SHA256.hash(data: secret).map { String(format: "%02x", $0) }.joined()
-        let resetEpoch = counterResetAt.map { String(format: "%.6f", $0.timeIntervalSince1970) } ?? "none"
+    internal var metadataTieBreakKey: String {
         let parts = [
-            type.rawValue,
             issuer,
             label,
-            algorithm.rawValue,
-            "\(digits)",
-            "\(period)",
-            "\(counter)",
-            resetEpoch,
             folderID?.uuidString ?? "",
             isPinned ? "1" : "0",
             "\(sortOrder)",
             customBrandSlug ?? "",
             customLogoDomain ?? "",
-            secretDigest,
             id.uuidString,
+        ]
+        return parts.map { "\($0.utf8.count):\($0)" }.joined(separator: ",")
+    }
+
+    internal var credentialTieBreakKey: String {
+        let secretDigest = SHA256.hash(data: secret).map { String(format: "%02x", $0) }.joined()
+        let resetMillis = counterResetAt.map { "\($0.roundedEpochMillis)" } ?? "none"
+        let parts = [
+            type.rawValue,
+            algorithm.rawValue,
+            "\(digits)",
+            "\(period)",
+            "\(counter)",
+            "\(credentialGeneration)",
+            resetMillis,
+            secretDigest,
         ]
         return parts.map { "\($0.utf8.count):\($0)" }.joined(separator: ",")
     }
@@ -297,7 +308,8 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
     public var updatedAt: Date
     public var accountTombstones: [OTPTombstone]
     public var folderTombstones: [OTPTombstone]
-    public var tombstoneHorizon: Date?
+    public var cloudRetiredAtMillis: Int64?
+    public var cloudSyncGenerationMillis: Int64?
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion
@@ -306,7 +318,8 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         case updatedAt
         case accountTombstones
         case folderTombstones
-        case tombstoneHorizon
+        case cloudRetiredAtMillis
+        case cloudSyncGenerationMillis
     }
 
     public init(
@@ -316,7 +329,8 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         updatedAt: Date = Date(),
         accountTombstones: [OTPTombstone] = [],
         folderTombstones: [OTPTombstone] = [],
-        tombstoneHorizon: Date? = nil
+        cloudRetiredAtMillis: Int64? = nil,
+        cloudSyncGenerationMillis: Int64? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.folders = folders
@@ -324,7 +338,8 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         self.updatedAt = updatedAt
         self.accountTombstones = accountTombstones
         self.folderTombstones = folderTombstones
-        self.tombstoneHorizon = tombstoneHorizon
+        self.cloudRetiredAtMillis = cloudRetiredAtMillis
+        self.cloudSyncGenerationMillis = cloudSyncGenerationMillis
     }
 
     public init(from decoder: Decoder) throws {
@@ -335,7 +350,8 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         self.accountTombstones = try container.decodeIfPresent([OTPTombstone].self, forKey: .accountTombstones) ?? []
         self.folderTombstones = try container.decodeIfPresent([OTPTombstone].self, forKey: .folderTombstones) ?? []
-        self.tombstoneHorizon = try container.decodeIfPresent(Date.self, forKey: .tombstoneHorizon)
+        self.cloudRetiredAtMillis = try container.decodeIfPresent(Int64.self, forKey: .cloudRetiredAtMillis)
+        self.cloudSyncGenerationMillis = try container.decodeIfPresent(Int64.self, forKey: .cloudSyncGenerationMillis)
     }
 
     public func merged(with incoming: OTPVaultSnapshot, tombstoneLimit: Int? = nil) -> OTPVaultSnapshot {
@@ -348,23 +364,11 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
             }
         }
 
-        let selfFolderIDs = Set(folders.map(\.id))
-        let incomingFolderIDs = Set(incoming.folders.map(\.id))
         var folderMap: [UUID: OTPFolder] = [:]
         for folder in folders {
-            if !incomingFolderIDs.contains(folder.id),
-               let incomingHorizon = incoming.tombstoneHorizon,
-               folder.updatedAt <= incomingHorizon {
-                continue
-            }
             folderMap[folder.id] = folder
         }
         for folder in incoming.folders {
-            if !selfFolderIDs.contains(folder.id),
-               let selfHorizon = tombstoneHorizon,
-               folder.updatedAt <= selfHorizon {
-                continue
-            }
             if let existing = folderMap[folder.id] {
                 let incomingWins = folder.updatedAt != existing.updatedAt
                     ? folder.updatedAt > existing.updatedAt
@@ -401,36 +405,37 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
             }
         }
 
-        let selfAccountIDs = Set(accounts.map(\.id))
-        let incomingAccountIDs = Set(incoming.accounts.map(\.id))
         var accountMap: [UUID: OTPAccount] = [:]
-        for account in accounts {
-            if !incomingAccountIDs.contains(account.id),
-               let incomingHorizon = incoming.tombstoneHorizon,
-               account.updatedAt <= incomingHorizon {
-                continue
+        func normalizedFolderAccount(_ account: OTPAccount) -> OTPAccount {
+            guard let folderID = account.folderID, !validFolderIDs.contains(folderID) else {
+                return account
             }
+            var copy = account
+            copy.folderID = nil
+            return copy
+        }
+
+        for rawAccount in accounts {
+            let account = normalizedFolderAccount(rawAccount)
             accountMap[account.id] = account
         }
-        for account in incoming.accounts {
-            if !selfAccountIDs.contains(account.id),
-               let selfHorizon = tombstoneHorizon,
-               account.updatedAt <= selfHorizon {
-                continue
-            }
+        for rawAccount in incoming.accounts {
+            let account = normalizedFolderAccount(rawAccount)
             if let existing = accountMap[account.id] {
                 let incomingWinsMeta = account.updatedAt != existing.updatedAt
                     ? account.updatedAt > existing.updatedAt
-                    : account.mergeTieBreakKey > existing.mergeTieBreakKey
+                    : account.metadataTieBreakKey > existing.metadataTieBreakKey
                 var winner = incomingWinsMeta ? account : existing
 
-                let existingReset = existing.counterResetAt ?? .distantPast
-                let incomingReset = account.counterResetAt ?? .distantPast
-                if incomingReset != existingReset {
-                    let resetSource = incomingReset > existingReset ? account : existing
+                let existingTuple = (existing.credentialGeneration, existing.counterResetAt?.roundedEpochMillis ?? Int64.min)
+                let incomingTuple = (account.credentialGeneration, account.counterResetAt?.roundedEpochMillis ?? Int64.min)
+
+                if incomingTuple != existingTuple {
+                    let resetSource = incomingTuple > existingTuple ? account : existing
                     winner.secret = resetSource.secret
                     winner.counter = resetSource.counter
                     winner.counterResetAt = resetSource.counterResetAt
+                    winner.credentialGeneration = resetSource.credentialGeneration
                     winner.type = resetSource.type
                     winner.algorithm = resetSource.algorithm
                     winner.digits = resetSource.digits
@@ -442,6 +447,22 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
                         winner.counter = maxCounter
                         winner.updatedAt = max(existing.updatedAt, account.updatedAt)
                     }
+                } else if existing.secret != account.secret
+                            || existing.type != account.type
+                            || existing.algorithm != account.algorithm
+                            || existing.digits != account.digits
+                            || existing.period != account.period
+                            || existing.counter != account.counter {
+                    let credSource = account.credentialTieBreakKey > existing.credentialTieBreakKey ? account : existing
+                    winner.secret = credSource.secret
+                    winner.counter = credSource.counter
+                    winner.counterResetAt = credSource.counterResetAt
+                    winner.credentialGeneration = credSource.credentialGeneration
+                    winner.type = credSource.type
+                    winner.algorithm = credSource.algorithm
+                    winner.digits = credSource.digits
+                    winner.period = credSource.period
+                    winner.updatedAt = max(existing.updatedAt, account.updatedAt)
                 }
                 accountMap[account.id] = winner
             } else {
@@ -451,14 +472,11 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
 
         var mergedAccounts: [OTPAccount] = []
         mergedAccounts.reserveCapacity(accountMap.count)
-        for (id, var account) in accountMap {
+        for (id, account) in accountMap {
             if let deletedAt = accountTombstoneMap[id], deletedAt >= account.updatedAt {
                 continue
             }
             accountTombstoneMap.removeValue(forKey: id)
-            if let folderID = account.folderID, !validFolderIDs.contains(folderID) {
-                account.folderID = nil
-            }
             mergedAccounts.append(account)
         }
         mergedAccounts.sort {
@@ -479,24 +497,16 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
                 return $0.id.uuidString < $1.id.uuidString
             }
 
-        var finalHorizon: Date? = [tombstoneHorizon, incoming.tombstoneHorizon].compactMap { $0 }.max()
+        let finalFolderTombstones = tombstoneLimit.map { Array(sortedFolderTombstones.prefix($0)) } ?? sortedFolderTombstones
+        let finalAccountTombstones = tombstoneLimit.map { Array(sortedAccountTombstones.prefix($0)) } ?? sortedAccountTombstones
 
-        let finalFolderTombstones: [OTPTombstone]
-        if let tombstoneLimit, sortedFolderTombstones.count > tombstoneLimit {
-            finalFolderTombstones = Array(sortedFolderTombstones.prefix(tombstoneLimit))
-            let droppedMax = sortedFolderTombstones.dropFirst(tombstoneLimit).map(\.deletedAt).max()
-            finalHorizon = [finalHorizon, droppedMax].compactMap { $0 }.max()
+        let mergedRetiredAt = [cloudRetiredAtMillis, incoming.cloudRetiredAtMillis].compactMap { $0 }.max()
+        let mergedSyncGen = [cloudSyncGenerationMillis, incoming.cloudSyncGenerationMillis].compactMap { $0 }.max()
+        let resolvedRetiredAt: Int64?
+        if let mergedRetiredAt {
+            resolvedRetiredAt = (mergedSyncGen ?? Int64.min) > mergedRetiredAt ? nil : mergedRetiredAt
         } else {
-            finalFolderTombstones = sortedFolderTombstones
-        }
-
-        let finalAccountTombstones: [OTPTombstone]
-        if let tombstoneLimit, sortedAccountTombstones.count > tombstoneLimit {
-            finalAccountTombstones = Array(sortedAccountTombstones.prefix(tombstoneLimit))
-            let droppedMax = sortedAccountTombstones.dropFirst(tombstoneLimit).map(\.deletedAt).max()
-            finalHorizon = [finalHorizon, droppedMax].compactMap { $0 }.max()
-        } else {
-            finalAccountTombstones = sortedAccountTombstones
+            resolvedRetiredAt = nil
         }
 
         return OTPVaultSnapshot(
@@ -506,8 +516,18 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
             updatedAt: max(updatedAt, incoming.updatedAt),
             accountTombstones: finalAccountTombstones,
             folderTombstones: finalFolderTombstones,
-            tombstoneHorizon: finalHorizon
+            cloudRetiredAtMillis: resolvedRetiredAt,
+            cloudSyncGenerationMillis: mergedSyncGen
         )
+    }
+}
+
+extension Date {
+    internal var roundedEpochMillis: Int64 {
+        let scaled = (timeIntervalSince1970 * 1000.0).rounded()
+        if scaled >= Double(Int64.max) { return Int64.max }
+        if scaled <= Double(Int64.min) { return Int64.min }
+        return Int64(scaled)
     }
 }
 
@@ -516,7 +536,7 @@ public enum VaultSnapshotCoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .custom { date, encoder in
             var container = encoder.singleValueContainer()
-            try container.encode(Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date))
+            try container.encode(formatISO8601Millis(date))
         }
         return try encoder.encode(value)
     }
@@ -526,6 +546,9 @@ public enum VaultSnapshotCoder {
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
             let string = try container.decode(String.self)
+            if let date = parseISO8601(string) {
+                return date
+            }
             if let date = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(string) {
                 return date
             }
@@ -546,6 +569,91 @@ public enum VaultSnapshotCoder {
 
     public static func decode(from data: Data) throws -> OTPVaultSnapshot {
         try decodeValue(OTPVaultSnapshot.self, from: data)
+    }
+
+    private static func formatISO8601Millis(_ date: Date) -> String {
+        let epochMs = date.roundedEpochMillis
+        let totalSeconds = epochMs >= 0 ? (epochMs / 1000) : ((epochMs - 999) / 1000)
+        let millis = Int(epochMs - totalSeconds * 1000)
+        let days = totalSeconds >= 0 ? (totalSeconds / 86400) : ((totalSeconds - 86399) / 86400)
+        let secOfDay = Int(totalSeconds - days * 86400)
+        let hour = secOfDay / 3600
+        let minute = (secOfDay % 3600) / 60
+        let second = secOfDay % 60
+
+        let z = days + 719468
+        let era = (z >= 0 ? z : z - 146096) / 146097
+        let doe = z - era * 146097
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+        let y = yoe + era * 400
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+        let mp = (5 * doy + 2) / 153
+        let day = Int(doy - (153 * mp + 2) / 5 + 1)
+        let month = Int(mp + (mp < 10 ? 3 : -9))
+        let year = y + (month <= 2 ? 1 : 0)
+
+        guard year >= 0, year <= 9999 else {
+            return Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date)
+        }
+        return String(
+            format: "%04lld-%02d-%02dT%02d:%02d:%02d.%03dZ",
+            year, month, day, hour, minute, second, millis
+        )
+    }
+
+    private static func parseISO8601(_ s: String) -> Date? {
+        let utf8 = Array(s.utf8)
+        // Parse fixed UTC format YYYY-MM-DDTHH:MM:SS(.mmm)?Z without floating-point formatting jitter
+        guard utf8.count >= 20,
+              utf8[utf8.count - 1] == 0x5A, // 'Z'
+              utf8[4] == 0x2D, utf8[7] == 0x2D, utf8[10] == 0x54, utf8[13] == 0x3A, utf8[16] == 0x3A else {
+            return nil
+        }
+
+        func parseDigits(_ start: Int, _ count: Int) -> Int64? {
+            var value: Int64 = 0
+            for i in start..<(start + count) {
+                let c = utf8[i]
+                guard c >= 0x30, c <= 0x39 else { return nil }
+                value = value * 10 + Int64(c - 0x30)
+            }
+            return value
+        }
+
+        guard let year = parseDigits(0, 4),
+              let month = parseDigits(5, 2), (1...12).contains(month),
+              let day = parseDigits(8, 2), (1...31).contains(day),
+              let hour = parseDigits(11, 2), (0...23).contains(hour),
+              let minute = parseDigits(14, 2), (0...59).contains(minute),
+              let second = parseDigits(17, 2), (0...59).contains(second) else {
+            return nil
+        }
+
+        var millis: Int64 = 0
+        if utf8.count > 20 {
+            guard utf8[19] == 0x2E, utf8.count >= 22 else { return nil }
+            let fracCount = utf8.count - 21
+            var scale: Int64 = 100
+            for i in 20..<(utf8.count - 1) {
+                let c = utf8[i]
+                guard c >= 0x30, c <= 0x39 else { return nil }
+                if scale > 0 {
+                    millis += Int64(c - 0x30) * scale
+                    scale /= 10
+                }
+            }
+            _ = fracCount
+        }
+
+        let adjYear = year - (month <= 2 ? 1 : 0)
+        let era = (adjYear >= 0 ? adjYear : adjYear - 399) / 400
+        let yoe = adjYear - era * 400
+        let adjMonth = month + (month > 2 ? -3 : 9)
+        let doy = (153 * adjMonth + 2) / 5 + day - 1
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+        let days = era * 146097 + doe - 719468
+        let totalSeconds = days * 86400 + hour * 3600 + minute * 60 + second
+        return Date(timeIntervalSince1970: Double(totalSeconds) + Double(millis) / 1000.0)
     }
 }
 

@@ -316,7 +316,7 @@ public enum CryptoPrimitives {
                 xBuffer[idx] = blocks[base + idx]
             }
 
-            scryptROMix(
+            try scryptROMix(
                 x: &xBuffer,
                 y: &yBuffer,
                 v: &vBuffer,
@@ -359,8 +359,11 @@ public enum CryptoPrimitives {
         n: Int,
         r: Int,
         blockWordCount: Int
-    ) {
+    ) throws {
         for i in 0..<n {
+            if (i & 1023) == 0 && Task.isCancelled {
+                throw CancellationError()
+            }
             let vOffset = i * blockWordCount
             for k in 0..<blockWordCount {
                 v[vOffset + k] = x[k]
@@ -371,7 +374,10 @@ public enum CryptoPrimitives {
 
         let mask = UInt64(n - 1)
         let lastChunkWordOffset = (2 * r - 1) * 16
-        for _ in 0..<n {
+        for i in 0..<n {
+            if (i & 1023) == 0 && Task.isCancelled {
+                throw CancellationError()
+            }
             let integerLow = UInt64(x[lastChunkWordOffset])
             let integerHigh = UInt64(x[lastChunkWordOffset + 1]) << 32
             let j = Int((integerLow | integerHigh) & mask)

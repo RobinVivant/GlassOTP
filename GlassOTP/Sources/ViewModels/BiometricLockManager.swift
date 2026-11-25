@@ -164,16 +164,27 @@ final class BiometricLockManager {
         }
     }
 
-    func verifyDeviceOwner(reason: String) async -> Bool {
-        guard !isAuthenticating else { return false }
+    func verifyDeviceOwner(reason: String) async -> (succeeded: Bool, errorMessage: String?) {
+        guard !isAuthenticating else { return (false, nil) }
         let context = LAContext()
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-            return false
+            return (
+                false,
+                error?.localizedDescription
+                    ?? "Set a device passcode or enable \(biometryDisplayName) in iOS Settings."
+            )
         }
         isAuthenticating = true
         defer { isAuthenticating = false }
-        return (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) == true
+        do {
+            let ok = try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)
+            return (ok, ok ? nil : "Authentication failed.")
+        } catch let laError as LAError where laError.code == .userCancel || laError.code == .systemCancel {
+            return (false, nil)
+        } catch {
+            return (false, error.localizedDescription)
+        }
     }
 
     func handleScenePhaseChange(_ phase: ScenePhase) {

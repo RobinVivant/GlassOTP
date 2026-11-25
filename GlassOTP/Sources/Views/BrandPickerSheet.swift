@@ -11,6 +11,7 @@ struct BrandPickerSheet: View {
     @State private var customDomain: String
     @State private var isFetchingDomain = false
     @State private var domainError: String?
+    @State private var domainFetchTask: Task<Void, Never>?
 
     init(account: OTPAccount) {
         self.account = account
@@ -46,6 +47,10 @@ struct BrandPickerSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .onDisappear {
+                domainFetchTask?.cancel()
+                domainFetchTask = nil
             }
         }
     }
@@ -207,8 +212,10 @@ struct BrandPickerSheet: View {
         guard let cleaned = BrandCatalog.cleanedDomain(customDomain) else { return }
         isFetchingDomain = true
         domainError = nil
-        Task {
+        domainFetchTask?.cancel()
+        domainFetchTask = Task {
             let success = await BrandLogoFetcher.fetchLogo(forDomain: cleaned)
+            guard !Task.isCancelled else { return }
             isFetchingDomain = false
             if success {
                 if vault.updateBrandOverride(for: account, brandSlug: nil, customDomain: cleaned) {

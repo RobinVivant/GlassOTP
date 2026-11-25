@@ -214,17 +214,25 @@ struct AccountEditorSheet: View {
                         guard let secret = decodedSecret else { return }
                         saveErrorMessage = nil
                         let resolvedResetAt: Date?
+                        let resolvedGeneration: UInt64
                         if let existingAccount {
-                            let secretChanged = existingAccount.secret != secret
-                            let counterChanged = (type == .hotp && existingAccount.counter != counter)
-                            if secretChanged || counterChanged {
+                            let credentialsChanged = existingAccount.secret != secret
+                                || existingAccount.type != type
+                                || existingAccount.algorithm != algorithm
+                                || existingAccount.digits != digits
+                                || existingAccount.period != period
+                                || (type == .hotp && existingAccount.counter != counter)
+                            if credentialsChanged {
                                 let floor = (existingAccount.counterResetAt ?? .distantPast).addingTimeInterval(0.002)
                                 resolvedResetAt = max(Date(), floor)
+                                resolvedGeneration = existingAccount.credentialGeneration &+ 1
                             } else {
                                 resolvedResetAt = existingAccount.counterResetAt
+                                resolvedGeneration = existingAccount.credentialGeneration
                             }
                         } else {
                             resolvedResetAt = nil
+                            resolvedGeneration = 0
                         }
                         let updated = OTPAccount(
                             id: existingAccount?.id ?? UUID(),
@@ -242,6 +250,7 @@ struct AccountEditorSheet: View {
                             createdAt: existingAccount?.createdAt ?? Date(),
                             updatedAt: Date(),
                             counterResetAt: resolvedResetAt,
+                            credentialGeneration: resolvedGeneration,
                             customBrandSlug: existingAccount?.customBrandSlug,
                             customLogoDomain: existingAccount?.customLogoDomain
                         )

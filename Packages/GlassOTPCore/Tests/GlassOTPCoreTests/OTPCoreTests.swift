@@ -520,19 +520,59 @@ struct OTPCoreTests {
         #expect(!SharedWidgetStateStore.wasRecentlyCopied(accountID: testID, now: t0.addingTimeInterval(2.5)))
     }
 
-    @Test("VaultSnapshotCoder preserves subsecond timestamps and decodes legacy whole-second ISO8601")
+    @Test("VaultSnapshotCoder preserves subsecond timestamps across repeated round-trips and decodes legacy ISO8601")
     func snapshotCoderSubsecondAndLegacy() throws {
-        let subsecondDate = Date(timeIntervalSince1970: 1_795_600_000.654)
-        let snapshot = OTPVaultSnapshot(
-            folders: [OTPFolder(name: "Sec", sortOrder: 0, updatedAt: subsecondDate)],
-            accounts: [OTPAccount(issuer: "GitHub", label: "a", secret: Data("s".utf8), type: .hotp, counter: 3, createdAt: subsecondDate, updatedAt: subsecondDate, counterResetAt: subsecondDate)],
-            updatedAt: subsecondDate
+        // Specifically verify .002Z (prone to binary-float truncation under naive DateComponents formatting) and .distantPast
+        let exactDate = Date(timeIntervalSince1970: 1_795_600_000.002)
+        let hotpID = UUID()
+        var current = OTPVaultSnapshot(
+            folders: [OTPFolder(name: "Sec", sortOrder: 0, updatedAt: exactDate)],
+            accounts: [
+                OTPAccount(
+                    id: hotpID,
+                    issuer: "GitHub",
+                    label: "a",
+                    secret: Data("s".utf8),
+                    type: .hotp,
+                    counter: 3,
+                    createdAt: Date.distantPast,
+                    updatedAt: exactDate,
+                    counterResetAt: exactDate,
+                    credentialGeneration: 2
+                ),
+            ],
+            updatedAt: exactDate
         )
-        let encoded = try VaultSnapshotCoder.encode(snapshot)
-        let decoded = try VaultSnapshotCoder.decode(from: encoded)
-        #expect(abs((decoded.accounts[0].counterResetAt?.timeIntervalSince1970 ?? 0) - 1_795_600_000.654) < 0.002)
+        for _ in 0..<10 {
+            let encoded = try VaultSnapshotCoder.encode(current)
+            let decoded = try VaultSnapshotCoder.decode(from: encoded)
+            #expect(decoded.accounts[0].updatedAt.roundedEpochMillis == exactDate.roundedEpochMillis)
+            #expect(decoded.accounts[0].counterResetAt?.roundedEpochMillis == exactDate.roundedEpochMillis)
+            #expect(decoded.accounts[0].createdAt.roundedEpochMillis == Date.distantPast.roundedEpochMillis)
+            current = decoded
+        }
 
-        // Legacy whole-second JSON without fractional seconds or tombstoneHorizon
+        let advancedHOTP = OTPVaultSnapshot(
+            accounts: [
+                OTPAccount(
+                    id: hotpID,
+                    issuer: "GitHub",
+                    label: "a",
+                    secret: Data("s".utf8),
+                    type: .hotp,
+                    counter: 5,
+                    createdAt: Date.distantPast,
+                    updatedAt: exactDate.addingTimeInterval(1),
+                    counterResetAt: exactDate,
+                    credentialGeneration: 2
+                ),
+            ],
+            updatedAt: exactDate.addingTimeInterval(1)
+        )
+        let merged = current.merged(with: advancedHOTP)
+        #expect(merged.accounts.first(where: { $0.id == hotpID })?.counter == 5)
+
+        // Legacy whole-second JSON without fractional seconds
         let legacyJSON = Data("""
         {
           "schemaVersion": 1,
@@ -551,17 +591,17 @@ struct OTPCoreTests {
         """.utf8)
         let legacyDecoded = try VaultSnapshotCoder.decode(from: legacyJSON)
         #expect(legacyDecoded.accounts.count == 1)
-        #expect(legacyDecoded.tombstoneHorizon == nil)
+        #expect(legacyDecoded.accounts[0].credentialGeneration == 0)
     }
 
-    @Test("Merge handles HOTP secret rotation coherently, ties deterministically, and prevents post-cap resurrection")
-    func mergeCoherentResetDeterministicTiesAndHorizon() throws {
+    @Test("Merge handles HOTP secret rotation coherently, ties deterministically, and retains tombstones over >500 deletions")
+    func mergeCoherentResetDeterministicTiesAndRetainedTombstones() throws {
         let id = UUID()
         let folderID = UUID()
         let t1 = Date(timeIntervalSince1970: 1_700_000_000.100)
         let t2 = Date(timeIntervalSince1970: 1_700_000_000.900) // subsecond later in same second
 
-        // Offline increment vs secret rotation: secret & counter stay coupled
+        // Offline increment vs secret rotation: credentialGeneration/reset tuple takes precedence cleanly
         let oldSecret = Data([1, 1, 1])
         let newSecret = Data([2, 2, 2])
         let offlineIncrement = OTPAccount(
@@ -573,7 +613,8 @@ struct OTPCoreTests {
             counter: 42,
             createdAt: t1,
             updatedAt: t2,
-            counterResetAt: nil
+            counterResetAt: nil,
+            credentialGeneration: 0
         )
         let rotated = OTPAccount(
             id: id,
@@ -584,7 +625,8 @@ struct OTPCoreTests {
             counter: 0,
             createdAt: t1,
             updatedAt: t1.addingTimeInterval(0.3),
-            counterResetAt: t1.addingTimeInterval(0.3)
+            counterResetAt: t1.addingTimeInterval(0.3),
+            credentialGeneration: 1
         )
         let incSnap = OTPVaultSnapshot(accounts: [offlineIncrement], updatedAt: t2)
         let rotSnap = OTPVaultSnapshot(accounts: [rotated], updatedAt: t1.addingTimeInterval(0.3))
@@ -594,6 +636,7 @@ struct OTPCoreTests {
         #expect(ab.accounts[0] == ba.accounts[0])
         #expect(ab.accounts[0].secret == newSecret)
         #expect(ab.accounts[0].counter == 0)
+        #expect(ab.accounts[0].credentialGeneration == 1)
         #expect(ab.accounts[0].label == "ops-renamed")
 
         // Deterministic tie-break on identical encoded timestamp
@@ -606,22 +649,134 @@ struct OTPCoreTests {
         let m2 = try VaultSnapshotCoder.decode(from: VaultSnapshotCoder.encode(snapB.merged(with: snapA)))
         #expect(m1.folders == m2.folders)
 
-        // > cap deletions advance tombstoneHorizon and prevent old replica resurrection
-        let oldAccID = UUID()
-        let oldAcc = OTPAccount(id: oldAccID, issuer: "Old", label: "stale", secret: Data("abc".utf8), createdAt: t1, updatedAt: t1)
-        let staleDevice = OTPVaultSnapshot(accounts: [oldAcc], updatedAt: t1)
-        let tombstones = (0..<5).map { idx in
-            OTPTombstone(id: idx == 0 ? oldAccID : UUID(), deletedAt: t1.addingTimeInterval(TimeInterval(idx + 1)))
+        // >500 unrelated deletions retain all tombstones AND preserve unseen offline accounts/folders
+        let deletedAccID = UUID()
+        let unseenAccID = UUID()
+        let unseenFolderID = UUID()
+        let unseenFolder = OTPFolder(id: unseenFolderID, name: "OfflineFolder", sortOrder: 0, updatedAt: t1)
+        let staleDeletedAcc = OTPAccount(id: deletedAccID, issuer: "Deleted", label: "x", secret: Data("abc".utf8), createdAt: t1, updatedAt: t1)
+        let unseenOfflineAcc = OTPAccount(id: unseenAccID, issuer: "UnseenOffline", label: "y", secret: Data("def".utf8), folderID: unseenFolderID, createdAt: t1, updatedAt: t1)
+        let staleDevice = OTPVaultSnapshot(
+            folders: [unseenFolder],
+            accounts: [staleDeletedAcc, unseenOfflineAcc],
+            updatedAt: t1
+        )
+
+        var tombstones = [OTPTombstone(id: deletedAccID, deletedAt: t1.addingTimeInterval(1))]
+        for idx in 1..<600 {
+            tombstones.append(OTPTombstone(id: UUID(), deletedAt: t1.addingTimeInterval(TimeInterval(idx + 1))))
         }
         let pruningDevice = OTPVaultSnapshot(
             accounts: [],
-            updatedAt: t1.addingTimeInterval(10),
+            updatedAt: t1.addingTimeInterval(700),
             accountTombstones: tombstones
-        ).merged(with: OTPVaultSnapshot(), tombstoneLimit: 3)
-        #expect(pruningDevice.accountTombstones.count == 3)
-        #expect(pruningDevice.tombstoneHorizon != nil)
+        ).merged(with: OTPVaultSnapshot())
+        #expect(pruningDevice.accountTombstones.count == 600)
 
-        let mergedAfterPrune = pruningDevice.merged(with: staleDevice, tombstoneLimit: 3)
-        #expect(!mergedAfterPrune.accounts.contains(where: { $0.id == oldAccID }))
+        let mergedAfterManyDeletes = pruningDevice.merged(with: staleDevice)
+        #expect(!mergedAfterManyDeletes.accounts.contains(where: { $0.id == deletedAccID }))
+        #expect(mergedAfterManyDeletes.accounts.contains(where: { $0.id == unseenAccID }))
+        #expect(mergedAfterManyDeletes.folders.contains(where: { $0.id == unseenFolderID }))
+    }
+
+    @Test("Snapshot merge is commutative and idempotent across 500 randomized states")
+    func snapshotMergeCommutativeAndIdempotentFuzz() {
+        struct SplitMix64: RandomNumberGenerator {
+            private var state: UInt64
+            init(seed: UInt64) { self.state = seed }
+            mutating func next() -> UInt64 {
+                state &+= 0x9E3779B97F4A7C15
+                var z = state
+                z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+                z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+                return z ^ (z >> 31)
+            }
+        }
+
+        let folderPool = (0..<4).map { _ in UUID() }
+        let accountPool = (0..<8).map { _ in UUID() }
+        let baseMillis: Int64 = 1_795_600_000_000
+        let secrets = [Data([1, 2, 3]), Data([4, 5, 6]), Data([7, 8, 9])]
+        let algos: [OTPAlgorithm] = [.sha1, .sha256, .sha512]
+        var rng = SplitMix64(seed: 0x474C4F54505F5234)
+
+        func makeRandomDate(_ rng: inout SplitMix64) -> Date {
+            let offsetMillis = Int64(rng.next() % 20) * 150
+            return Date(timeIntervalSince1970: Double(baseMillis + offsetMillis) / 1000.0)
+        }
+
+        func makeRandomSnapshot(_ rng: inout SplitMix64) -> OTPVaultSnapshot {
+            var folders: [OTPFolder] = []
+            var folderTombstones: [OTPTombstone] = []
+            for fid in folderPool {
+                let pick = rng.next() % 4
+                if pick < 2 {
+                    folders.append(
+                        OTPFolder(
+                            id: fid,
+                            name: "F-\(rng.next() % 3)",
+                            sortOrder: Int(rng.next() % 5),
+                            updatedAt: makeRandomDate(&rng)
+                        )
+                    )
+                } else if pick == 2 {
+                    folderTombstones.append(OTPTombstone(id: fid, deletedAt: makeRandomDate(&rng)))
+                }
+            }
+
+            var accounts: [OTPAccount] = []
+            var accountTombstones: [OTPTombstone] = []
+            for aid in accountPool {
+                let pick = rng.next() % 4
+                if pick < 2 {
+                    let type: OTPType = (rng.next() % 2 == 0) ? .totp : .hotp
+                    let hasReset = (rng.next() % 3 == 0)
+                    let assignedFolder: UUID? = (rng.next() % 3 == 0) ? nil : folderPool[Int(rng.next() % UInt64(folderPool.count))]
+                    accounts.append(
+                        OTPAccount(
+                            id: aid,
+                            issuer: "Issuer-\(rng.next() % 3)",
+                            label: "User-\(rng.next() % 3)",
+                            secret: secrets[Int(rng.next() % UInt64(secrets.count))],
+                            type: type,
+                            algorithm: algos[Int(rng.next() % UInt64(algos.count))],
+                            digits: (rng.next() % 2 == 0) ? 6 : 8,
+                            period: (rng.next() % 2 == 0) ? 30 : 60,
+                            counter: rng.next() % 20,
+                            folderID: assignedFolder,
+                            isPinned: rng.next() % 2 == 0,
+                            sortOrder: Int(rng.next() % 10),
+                            createdAt: Date(timeIntervalSince1970: Double(baseMillis - 10_000) / 1000.0),
+                            updatedAt: makeRandomDate(&rng),
+                            counterResetAt: hasReset ? makeRandomDate(&rng) : nil,
+                            credentialGeneration: rng.next() % 4
+                        )
+                    )
+                } else if pick == 2 {
+                    accountTombstones.append(OTPTombstone(id: aid, deletedAt: makeRandomDate(&rng)))
+                }
+            }
+
+            return OTPVaultSnapshot(
+                schemaVersion: 1,
+                folders: folders,
+                accounts: accounts,
+                updatedAt: makeRandomDate(&rng),
+                accountTombstones: accountTombstones,
+                folderTombstones: folderTombstones,
+                cloudRetiredAtMillis: (rng.next() % 5 == 0) ? (baseMillis + Int64(rng.next() % 10)) : nil,
+                cloudSyncGenerationMillis: (rng.next() % 5 == 0) ? (baseMillis + Int64(rng.next() % 10)) : nil
+            )
+        }
+
+        for _ in 0..<500 {
+            let a = makeRandomSnapshot(&rng)
+            let b = makeRandomSnapshot(&rng)
+            let ab = a.merged(with: b)
+            let ba = b.merged(with: a)
+            #expect(ab == ba)
+            #expect(ab.merged(with: b) == ab)
+            #expect(ab.merged(with: a) == ab)
+        }
     }
 }

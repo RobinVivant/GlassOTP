@@ -86,7 +86,6 @@ final class VaultViewModel {
         self.hideCodesInApp = UserDefaults.standard.bool(forKey: Self.hideCodesKey)
         self.universalClipboardEnabled = SharedClipboardPreferences.isUniversalClipboardEnabled
         self.dismissedAutoCategorizeBanner = UserDefaults.standard.bool(forKey: Self.dismissBannerKey)
-        purgeStaleInboxFiles()
         reloadFromStore()
     }
 
@@ -138,6 +137,7 @@ final class VaultViewModel {
     }
 
     private func applySnapshotToMemory(_ snapshot: OTPVaultSnapshot) {
+        iCloudSyncEnabled = store.isICloudSyncEnabled()
         folders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
         accounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
         accountTombstones = snapshot.accountTombstones
@@ -243,50 +243,43 @@ final class VaultViewModel {
     }
 
     func copyCode(for account: OTPAccount, at date: Date = Date(), reloadWidgets: Bool = false) {
-        guard account.isSupportedAlgorithm else {
-            alertMessage = "\(account.displayTitle) uses legacy \(account.algorithm.displayName), which GlassOTP no longer generates."
+        guard !hasLoadError else {
+            alertMessage = "Cannot copy codes because the existing Keychain vault could not be loaded."
             return
         }
 
-        var effectiveAccount = account
-        if account.type == .hotp {
-            guard !hasLoadError else {
-                alertMessage = "Cannot advance HOTP counter because the existing Keychain vault could not be loaded."
-                return
-            }
-            var reservedAccount: OTPAccount?
-            do {
-                if let updatedSnapshot = try store.mutateSnapshotIfPresent({ snapshot in
-                    guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }) else {
-                        return false
-                    }
-                    let current = snapshot.accounts[idx]
-                    reservedAccount = current
-                    guard current.isSupportedAlgorithm else {
-                        return false
-                    }
-                    snapshot.accounts[idx].counter &+= 1
-                    snapshot.accounts[idx].updatedAt = date
-                    return true
-                }) {
-                    applySnapshotToMemory(updatedSnapshot)
-                } else {
-                    reloadFromStore()
-                    return
+        var resolvedAccount: OTPAccount?
+        do {
+            if let updatedSnapshot = try store.mutateSnapshotIfPresent({ snapshot in
+                guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }) else {
+                    return false
                 }
-            } catch {
-                alertMessage = error.localizedDescription
-                return
-            }
-            guard let verifiedAccount = reservedAccount else {
+                let current = snapshot.accounts[idx]
+                resolvedAccount = current
+                guard current.isSupportedAlgorithm, current.type == .hotp else {
+                    return false
+                }
+                snapshot.accounts[idx].counter &+= 1
+                snapshot.accounts[idx].updatedAt = date
+                return true
+            }) {
+                applySnapshotToMemory(updatedSnapshot)
+            } else {
                 reloadFromStore()
                 return
             }
-            guard verifiedAccount.isSupportedAlgorithm else {
-                alertMessage = "\(verifiedAccount.displayTitle) uses legacy \(verifiedAccount.algorithm.displayName), which GlassOTP no longer generates."
-                return
-            }
-            effectiveAccount = verifiedAccount
+        } catch {
+            alertMessage = error.localizedDescription
+            return
+        }
+
+        guard let effectiveAccount = resolvedAccount else {
+            alertMessage = "That account is no longer in your vault."
+            return
+        }
+        guard effectiveAccount.isSupportedAlgorithm else {
+            alertMessage = "\(effectiveAccount.displayTitle) uses legacy \(effectiveAccount.algorithm.displayName), which GlassOTP no longer generates."
+            return
         }
 
         let snapshot = OTPGenerator.snapshot(for: effectiveAccount, at: date)
@@ -696,15 +689,26 @@ final class VaultViewModel {
         try? FileManager.default.removeItem(at: url)
     }
 
-    private func purgeStaleInboxFiles() {
+    func purgeStaleInboxFiles(olderThan age: TimeInterval = 300) {
         guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             return
         }
         let inbox = docs.appendingPathComponent("Inbox", isDirectory: true)
-        guard let contents = try? FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil) else {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: inbox,
+            includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey]
+        ) else {
             return
         }
+        let pendingStandardized = pendingIncomingURL?.standardizedFileURL
+        let cutoff = Date().addingTimeInterval(-age)
         for fileURL in contents {
+            if let pendingStandardized, fileURL.standardizedFileURL == pendingStandardized {
+                continue
+            }
+            let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
+            let modified = values?.contentModificationDate ?? values?.creationDate ?? Date()
+            guard modified <= cutoff else { continue }
             try? FileManager.default.removeItem(at: fileURL)
         }
     }

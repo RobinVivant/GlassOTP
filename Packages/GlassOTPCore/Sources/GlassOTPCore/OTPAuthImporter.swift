@@ -189,9 +189,11 @@ public enum OTPAuthImporter {
         }
 
         guard startsWithBinaryPlistHeader(innerData),
-              let innerRoot = (try? KeyedArchiveParser.parseRoot(from: innerData)) as? [String: Any],
-              let account = parseAccountDict(innerRoot, folderID: nil, sortOrder: 0) else {
+              let innerRoot = (try? KeyedArchiveParser.parseRoot(from: innerData)) as? [String: Any] else {
             throw OTPImportError.wrongPassword
+        }
+        guard let account = parseAccountDict(innerRoot, folderID: nil, sortOrder: 0) else {
+            throw OTPImportError.corruptedArchive("This OTP Auth account uses an unsupported algorithm or empty secret.")
         }
 
         return OTPAuthImportResult(
@@ -219,10 +221,10 @@ public enum OTPAuthImporter {
         let rawAlgo = intValue(dict["algorithm"]) ?? 1
         let algorithm: OTPAlgorithm
         switch rawAlgo {
+        case 0, 1: algorithm = .sha1
         case 2: algorithm = .sha256
         case 3: algorithm = .sha512
-        case 4: return nil
-        default: algorithm = .sha1
+        default: return nil
         }
 
         let rawDigits = intValue(dict["digits"]) ?? 0

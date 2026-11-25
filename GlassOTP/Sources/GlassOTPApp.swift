@@ -122,6 +122,8 @@ struct GlassOTPApp: App {
                         vault.commitPendingForegroundCopyIfNeeded()
                         vault.processPendingIncomingURLIfUnlocked(isLocked: false)
                     }
+                } else if newPhase == .background {
+                    vault.purgeStaleInboxFiles()
                 }
             }
             .onChange(of: security.isLocked) { _, isLocked in

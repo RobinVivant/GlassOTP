@@ -111,6 +111,18 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
             return Timeline(entries: [emptyEntry], policy: .after(now.addingTimeInterval(loaded.hasError ? 60 : 300)))
         }
 
+        if isAppLocked {
+            let lockedEntry = makeEntry(
+                at: now,
+                accounts: accounts,
+                requireTapToReveal: true,
+                universalClipboardEnabled: universalClipboardEnabled,
+                hasVaultError: false,
+                isAppLocked: true
+            )
+            return Timeline(entries: [lockedEntry], policy: .never)
+        }
+
         var boundaryDates: [Date] = [now]
         let horizonEnd = now.addingTimeInterval(3600)
         let activeAccounts = Array(accounts.prefix(4))
@@ -200,9 +212,25 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
     ) -> OTPWidgetEntry {
         let items = accounts.prefix(4).map { account in
             let supported = account.isSupportedAlgorithm
-            let codeSnapshot = OTPGenerator.snapshot(for: account, at: date, includeNextCode: false)
             let isRevealed = !isAppLocked && (!requireTapToReveal || SharedWidgetStateStore.isRevealed(accountID: account.id, now: date))
             let wasCopied = !isAppLocked && supported && SharedWidgetStateStore.wasRecentlyCopied(accountID: account.id, now: date)
+            let formattedCode: String
+            let periodStart: Date
+            let periodEnd: Date
+            if isAppLocked {
+                formattedCode = "••• •••"
+                periodStart = date
+                periodEnd = date
+            } else if supported {
+                let codeSnapshot = OTPGenerator.snapshot(for: account, at: date, includeNextCode: false)
+                formattedCode = codeSnapshot.formattedCode
+                periodStart = codeSnapshot.periodStart
+                periodEnd = codeSnapshot.periodEnd
+            } else {
+                formattedCode = "Unsupported"
+                periodStart = date
+                periodEnd = date
+            }
             let brand = account.brandStyle
             let matchedBrand = BrandCatalog.shared.match(account: account)
             let customDomain = BrandCatalog.cleanedDomain(account.customLogoDomain)
@@ -221,9 +249,9 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                 hasCustomLogoDomain: customDomain != nil,
                 isHOTP: account.type == .hotp,
                 isSupportedAlgorithm: supported,
-                formattedCode: supported ? codeSnapshot.formattedCode : "Unsupported",
-                periodStart: codeSnapshot.periodStart,
-                periodEnd: codeSnapshot.periodEnd,
+                formattedCode: formattedCode,
+                periodStart: periodStart,
+                periodEnd: periodEnd,
                 isMasked: !isRevealed,
                 wasCopied: wasCopied
             )
@@ -331,7 +359,7 @@ struct GlassOTPWidgetEntryView: View {
 
             codeText(for: item, size: 24)
 
-            if !item.isHOTP && item.isSupportedAlgorithm {
+            if !item.isHOTP && item.isSupportedAlgorithm && !entry.isAppLocked {
                 ProgressView(timerInterval: item.periodStart...item.periodEnd, countsDown: true) {
                     EmptyView()
                 } currentValueLabel: {
@@ -370,7 +398,7 @@ struct GlassOTPWidgetEntryView: View {
 
                             VStack(alignment: .trailing, spacing: 3) {
                                 codeText(for: item, size: 19)
-                                if !item.isHOTP && item.isSupportedAlgorithm {
+                                if !item.isHOTP && item.isSupportedAlgorithm && !entry.isAppLocked {
                                     ProgressView(timerInterval: item.periodStart...item.periodEnd, countsDown: true) {
                                         EmptyView()
                                     } currentValueLabel: {
@@ -402,7 +430,7 @@ struct GlassOTPWidgetEntryView: View {
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
                     Spacer(minLength: 4)
-                    if !item.isHOTP && item.isSupportedAlgorithm {
+                    if !item.isHOTP && item.isSupportedAlgorithm && !entry.isAppLocked {
                         Text(item.periodEnd, style: .timer)
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
@@ -434,7 +462,7 @@ struct GlassOTPWidgetEntryView: View {
                     Image(systemName: "checkmark")
                         .font(.title3.weight(.bold))
                         .widgetAccentable()
-                } else if !item.isHOTP && item.isSupportedAlgorithm {
+                } else if !item.isHOTP && item.isSupportedAlgorithm && !entry.isAppLocked {
                     ProgressView(timerInterval: item.periodStart...item.periodEnd, countsDown: true) {
                         EmptyView()
                     } currentValueLabel: {

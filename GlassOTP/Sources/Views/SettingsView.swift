@@ -35,6 +35,7 @@ struct SettingsView: View {
     @State private var showingICloudDisableConfirmation = false
     @State private var isExportingBackup = false
     @State private var exportTask: Task<Void, Never>?
+    @State private var exportOperationID = UUID()
     @State private var exportErrorMessage: String?
 
     private var iCloudSyncBinding: Binding<Bool> {
@@ -62,9 +63,11 @@ struct SettingsView: View {
                     security.biometricLockEnabled = true
                 } else {
                     Task {
-                        let verified = await security.verifyDeviceOwner(reason: "Authenticate to disable GlassOTP App Lock")
-                        if verified {
+                        let result = await security.verifyDeviceOwner(reason: "Authenticate to disable GlassOTP App Lock")
+                        if result.succeeded {
                             security.biometricLockEnabled = false
+                        } else if let errorMessage = result.errorMessage {
+                            vault.alertMessage = errorMessage
                         }
                     }
                 }
@@ -115,8 +118,10 @@ struct SettingsView: View {
                     Button {
                         exportTask?.cancel()
                         exportTask = nil
+                        exportOperationID = UUID()
                         exportDocument = nil
                         exportErrorMessage = nil
+                        isExportingBackup = false
                         exportPassword = ""
                         exportConfirmPassword = ""
                         showingExportPasswordPrompt = true
@@ -156,7 +161,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Security & Privacy")
                 } footer: {
-                    Text("When Universal Clipboard is enabled, copied OTP codes sync to your nearby Mac and iPad via Handoff. Turn it off for silent local-only 60s copies from widgets. When App Lock is enabled, widgets stay locked until you authenticate in GlassOTP.")
+                    Text("When Universal Clipboard is enabled, copied OTP codes sync to your nearby Mac and iPad via Handoff. Turn it off for silent local-only 60s copies from widgets. When App Lock is enabled, widgets stay masked and open GlassOTP.")
                 }
 
                 Section("Home & Lock Screen Widgets") {
@@ -189,9 +194,10 @@ struct SettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Deleting the iCloud copy removes it from iCloud Keychain and switches synced devices to local storage. Or keep the existing iCloud vault and switch only this device to local storage.")
+            Text("Clearing the iCloud copy replaces it with an empty retirement record and switches synced devices to local storage. Or keep the existing iCloud vault and switch only this device to local storage.")
         }
         .sheet(isPresented: $showingExportPasswordPrompt, onDismiss: {
+            exportOperationID = UUID()
             exportTask?.cancel()
             exportTask = nil
             isExportingBackup = false
@@ -226,8 +232,10 @@ struct SettingsView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") {
+                            exportOperationID = UUID()
                             exportTask?.cancel()
                             exportTask = nil
+                            isExportingBackup = false
                             exportDocument = nil
                             showingExportPasswordPrompt = false
                         }
@@ -236,24 +244,35 @@ struct SettingsView: View {
                         Button {
                             let snapshot = vault.makeBackupSnapshot()
                             let pwd = exportPassword
+                            let currentOpID = UUID()
+                            exportOperationID = currentOpID
                             exportErrorMessage = nil
                             isExportingBackup = true
                             exportTask?.cancel()
                             exportTask = Task {
                                 do {
-                                    let encoded = try await Task.detached(priority: .userInitiated) {
+                                    let worker = Task.detached(priority: .userInitiated) {
                                         try GlassOTPBackupCodec.encode(snapshot: snapshot, password: pwd)
-                                    }.value
-                                    guard !Task.isCancelled, showingExportPasswordPrompt else {
-                                        isExportingBackup = false
+                                    }
+                                    let encoded = try await withTaskCancellationHandler {
+                                        try await worker.value
+                                    } onCancel: {
+                                        worker.cancel()
+                                    }
+                                    guard exportOperationID == currentOpID,
+                                          !Task.isCancelled,
+                                          showingExportPasswordPrompt else {
                                         return
                                     }
                                     isExportingBackup = false
                                     exportDocument = GlassOTPBackupDocument(data: encoded)
                                     showingExportPasswordPrompt = false
-                                } catch {
-                                    guard !Task.isCancelled else {
+                                } catch is CancellationError {
+                                    if exportOperationID == currentOpID {
                                         isExportingBackup = false
+                                    }
+                                } catch {
+                                    guard exportOperationID == currentOpID, !Task.isCancelled else {
                                         return
                                     }
                                     isExportingBackup = false

@@ -198,8 +198,9 @@ public enum AccountCategorizer {
             }
         }
 
-        for idx in updatedFolders.indices {
+        for idx in updatedFolders.indices where updatedFolders[idx].sortOrder != idx {
             updatedFolders[idx].sortOrder = idx
+            updatedFolders[idx].updatedAt = Date()
         }
 
         return (updatedFolders, updatedAccounts)

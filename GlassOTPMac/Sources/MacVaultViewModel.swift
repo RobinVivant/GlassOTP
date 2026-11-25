@@ -54,6 +54,7 @@ final class MacVaultViewModel {
 
     private(set) var lastSyncDate: Date?
     private(set) var iCloudSyncEnabled = true
+    private(set) var hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
     private(set) var hasLoadError = false
     var syncError: String?
     var alertMessage: String?
@@ -136,6 +137,7 @@ final class MacVaultViewModel {
         self.store = store
         self.defaults = defaults
         self.iCloudSyncEnabled = store.isICloudSyncEnabled()
+        self.hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
         self.quickPickerHotKey = Self.loadQuickPickerHotKey(from: defaults)
         self.accountHotKeys = Self.loadAccountHotKeys(from: defaults)
         if let idStr = defaults.string(forKey: Self.menuBarAccountKey),
@@ -250,6 +252,7 @@ final class MacVaultViewModel {
     private func applyLoadedSnapshot(_ snapshot: OTPVaultSnapshot?) {
         storeGeneration &+= 1
         iCloudSyncEnabled = store.isICloudSyncEnabled()
+        hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
         if let snapshot {
             let sortedFolders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
             let sortedAccounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
@@ -287,6 +290,7 @@ final class MacVaultViewModel {
             applyLoadedSnapshot(snapshot)
         } catch {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             hasLoadError = true
             syncError = error.localizedDescription
         }
@@ -304,8 +308,46 @@ final class MacVaultViewModel {
         } catch {
             guard !Task.isCancelled, storeGeneration == expectedGeneration else { return }
             iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             hasLoadError = true
             syncError = error.localizedDescription
+        }
+    }
+
+    func updateICloudSync(enabled: Bool, removeFromICloud: Bool = true) {
+        storeGeneration &+= 1
+        do {
+            let migrated = try store.setICloudSyncEnabled(enabled, removeOppositeBucket: removeFromICloud)
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if let migrated {
+                applyLoadedSnapshot(migrated)
+            } else {
+                hasLoadError = false
+                syncError = nil
+            }
+        } catch let error as KeychainVaultError {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if case .cloudCleanupFailed = error {
+                reloadFromStore()
+            }
+            alertMessage = error.localizedDescription
+        } catch {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func retryPendingICloudCleanup() {
+        do {
+            try store.retryPendingICloudCleanup()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            alertMessage = "Deleted the leftover iCloud Keychain copy."
+        } catch {
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            alertMessage = error.localizedDescription
         }
     }
 
@@ -352,50 +394,42 @@ final class MacVaultViewModel {
             return false
         }
 
-        guard account.isSupportedAlgorithm else {
-            return fail("\(account.displayTitle) uses legacy \(account.algorithm.displayName), which GlassOTP no longer generates.")
+        guard !hasLoadError else {
+            return fail("Cannot copy codes because the existing Keychain vault could not be loaded.")
         }
         let now = Date()
-        var effectiveAccount = account
+        var resolvedAccount: OTPAccount?
 
-        if account.type == .hotp {
-            guard !hasLoadError else {
-                return fail("Cannot advance HOTP counter because the Keychain vault failed to load.")
-            }
-            var reservedAccount: OTPAccount?
-            do {
-                storeGeneration &+= 1
-                let updatedSnapshot = try store.mutateSnapshotIfPresent { snapshot in
-                    guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }) else {
-                        return false
-                    }
-                    let current = snapshot.accounts[idx]
-                    reservedAccount = current
-                    guard current.isSupportedAlgorithm else {
-                        return false
-                    }
-                    snapshot.accounts[idx].counter &+= 1
-                    snapshot.accounts[idx].updatedAt = now
-                    return true
+        do {
+            storeGeneration &+= 1
+            if let updatedSnapshot = try store.mutateSnapshotIfPresent({ snapshot in
+                guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }) else {
+                    return false
                 }
-                if let updatedSnapshot {
-                    applyLoadedSnapshot(updatedSnapshot)
-                } else {
-                    reloadFromStore()
-                    return fail("That account is no longer in your vault.")
+                let current = snapshot.accounts[idx]
+                resolvedAccount = current
+                guard current.isSupportedAlgorithm, current.type == .hotp else {
+                    return false
                 }
-            } catch {
-                syncError = error.localizedDescription
-                return fail(error.localizedDescription)
-            }
-            guard let verified = reservedAccount else {
+                snapshot.accounts[idx].counter &+= 1
+                snapshot.accounts[idx].updatedAt = now
+                return true
+            }) {
+                applyLoadedSnapshot(updatedSnapshot)
+            } else {
                 reloadFromStore()
                 return fail("That account is no longer in your vault.")
             }
-            guard verified.isSupportedAlgorithm else {
-                return fail("\(verified.displayTitle) uses legacy \(verified.algorithm.displayName), which GlassOTP no longer generates.")
-            }
-            effectiveAccount = verified
+        } catch {
+            syncError = error.localizedDescription
+            return fail(error.localizedDescription)
+        }
+
+        guard let effectiveAccount = resolvedAccount else {
+            return fail("That account is no longer in your vault.")
+        }
+        guard effectiveAccount.isSupportedAlgorithm else {
+            return fail("\(effectiveAccount.displayTitle) uses legacy \(effectiveAccount.algorithm.displayName), which GlassOTP no longer generates.")
         }
 
         let snapshot = OTPGenerator.snapshot(for: effectiveAccount, at: now, includeNextCode: false)
@@ -496,6 +530,7 @@ final class MacVaultViewModel {
 
     struct ImportSummary {
         let addedCount: Int
+        let addedFoldersCount: Int
         let skippedDuplicates: Int
         let saved: Bool
     }
@@ -517,9 +552,15 @@ final class MacVaultViewModel {
             skipDuplicates: skipDuplicates,
             preserveEmptyFolders: preserveEmptyFolders
         )
+        let addedFoldersCount = max(0, plan.folders.count - folders.count)
         let foldersChanged = plan.folders != folders
         guard plan.addedCount > 0 || (preserveEmptyFolders && foldersChanged) else {
-            return ImportSummary(addedCount: 0, skippedDuplicates: plan.skippedDuplicateCount, saved: true)
+            return ImportSummary(
+                addedCount: 0,
+                addedFoldersCount: 0,
+                skippedDuplicates: plan.skippedDuplicateCount,
+                saved: true
+            )
         }
         let prevFolders = folders
         let prevAccounts = accounts
@@ -530,7 +571,12 @@ final class MacVaultViewModel {
             folders = prevFolders
             accounts = prevAccounts
         }
-        return ImportSummary(addedCount: saved ? plan.addedCount : 0, skippedDuplicates: plan.skippedDuplicateCount, saved: saved)
+        return ImportSummary(
+            addedCount: saved ? plan.addedCount : 0,
+            addedFoldersCount: saved ? addedFoldersCount : 0,
+            skippedDuplicates: plan.skippedDuplicateCount,
+            saved: saved
+        )
     }
 
     func importBackupFile(data: Data, password: String?, filename: String) async -> Result<String, Error> {
@@ -558,6 +604,13 @@ final class MacVaultViewModel {
                 ))
             }
             if summary.addedCount == 0 {
+                if summary.addedFoldersCount > 0 {
+                    let folderNoun = summary.addedFoldersCount == 1 ? "folder" : "folders"
+                    if result.accounts.isEmpty {
+                        return .success("Restored \(summary.addedFoldersCount) \(folderNoun) (\(result.formatDescription)).")
+                    }
+                    return .success("Restored \(summary.addedFoldersCount) \(folderNoun); all \(result.accounts.count) accounts were already in your vault.")
+                }
                 return .success("All \(result.accounts.count) accounts were already in your vault.")
             }
             if result.skippedEntries > 0 {

@@ -549,4 +549,49 @@ struct VaultImporterTests {
             try OTPUriParser.parse("otpauth-migration://offline?data=\(encoded)")
         }
     }
+
+    @Test("OTPAuthImporter maps numeric algorithms 0..3, skips unknown algorithms in backups, and throws corruptedArchive on unsupported single account")
+    func otpAuthImporterNumericAlgorithmsAndSingleAccountError() throws {
+        let password = "otpauth-test-password"
+
+        // Backup database (.otpauthdb v1.1) with algorithms 0, 1, 2, 3 and unknown 9
+        let folderAccounts: [[String: Any]] = [
+            ["issuer": "ZeroSHA1", "label": "0", "secret": Data("11111".utf8), "type": 2, "algorithm": 0],
+            ["issuer": "OneSHA1", "label": "1", "secret": Data("22222".utf8), "type": 2, "algorithm": 1],
+            ["issuer": "TwoSHA256", "label": "2", "secret": Data("33333".utf8), "type": 2, "algorithm": 2],
+            ["issuer": "ThreeSHA512", "label": "3", "secret": Data("44444".utf8), "type": 2, "algorithm": 3],
+            ["issuer": "UnknownAlgo", "label": "9", "secret": Data("55555".utf8), "type": 2, "algorithm": 9],
+        ]
+        let dbInner: [String: Any] = ["Folders": [["name": "Work", "accounts": folderAccounts]]]
+        let dbInnerPlist = try NSKeyedArchiver.archivedData(withRootObject: dbInner, requiringSecureCoding: false)
+        let dbWrapped = try CryptoPrimitives.rncryptorV3Encrypt(plaintext: dbInnerPlist, password: password)
+        let dbOuter: [String: Any] = ["Version": 1.1, "WrappedData": dbWrapped]
+        let dbOuterPlist = try NSKeyedArchiver.archivedData(withRootObject: dbOuter, requiringSecureCoding: false)
+        let dbBytes = try CryptoPrimitives.aes256CBCEncrypt(
+            plaintext: dbOuterPlist,
+            key: CryptoPrimitives.sha256(Data("Authenticator".utf8)),
+            iv: Data(repeating: 0, count: 16)
+        )
+
+        let dbResult = try OTPAuthImporter.importFile(data: dbBytes, password: password, filenameHint: "backup.otpauthdb")
+        #expect(dbResult.accounts.count == 4)
+        #expect(dbResult.accounts.map(\.algorithm) == [.sha1, .sha1, .sha256, .sha512])
+        #expect(dbResult.skippedEntries == 1)
+
+        // Single-account (.otpauth v1.2) with unknown algorithm must throw corruptedArchive, NOT wrongPassword
+        let singleInner: [String: Any] = ["issuer": "Legacy", "label": "u", "secret": Data("12345".utf8), "type": 2, "algorithm": 9]
+        let singleInnerPlist = try NSKeyedArchiver.archivedData(withRootObject: singleInner, requiringSecureCoding: false)
+        let singleEncrypted = try CryptoPrimitives.rncryptorV3Encrypt(plaintext: singleInnerPlist, password: password)
+        let singleOuter: [String: Any] = ["Version": 1.2, "Data": singleEncrypted]
+        let singleOuterPlist = try NSKeyedArchiver.archivedData(withRootObject: singleOuter, requiringSecureCoding: false)
+        let singleBytes = try CryptoPrimitives.aes256CBCEncrypt(
+            plaintext: singleOuterPlist,
+            key: CryptoPrimitives.sha256(Data("OTPAuth".utf8)),
+            iv: Data(repeating: 0, count: 16)
+        )
+
+        #expect(throws: OTPImportError.corruptedArchive("This OTP Auth account uses an unsupported algorithm or empty secret.")) {
+            try OTPAuthImporter.importFile(data: singleBytes, password: password, filenameHint: "single.otpauth")
+        }
+    }
 }

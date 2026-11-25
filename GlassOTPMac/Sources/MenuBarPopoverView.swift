@@ -109,7 +109,7 @@ struct MenuBarPopoverView: View {
                     .font(.system(size: 12, weight: .semibold))
             }
             .buttonStyle(.borderless)
-            .help("Refresh iCloud Keychain Sync")
+            .help(vault.iCloudSyncEnabled ? "Refresh iCloud Keychain Sync" : "Reload Local Keychain Vault")
 
             Button {
                 withAnimation(.easeOut(duration: 0.15)) {
@@ -285,24 +285,35 @@ struct MenuBarPopoverView: View {
     private var emptyVaultView: some View {
         VStack(spacing: 12) {
             Spacer()
-            Image(systemName: "icloud.and.arrow.down")
+            Image(systemName: vault.iCloudSyncEnabled ? "icloud.and.arrow.down" : "lock.shield")
                 .font(.system(size: 32))
                 .foregroundStyle(Color.accentColor)
 
-            Text("Waiting for iCloud Keychain Sync")
+            Text(vault.iCloudSyncEnabled ? "Waiting for iCloud Keychain Sync" : "Local Keychain Vault")
                 .font(.headline)
 
-            Text("Open GlassOTP on your iPhone (with iCloud Keychain Sync enabled) so Apple syncs your vault to this Mac, or import an encrypted backup file directly.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 20)
+            Text(
+                vault.iCloudSyncEnabled
+                    ? "Open GlassOTP on your iPhone (with iCloud Keychain Sync enabled) so Apple syncs your vault to this Mac, or import an encrypted backup file directly."
+                    : "iCloud Keychain Sync is turned off on this Mac. Enable iCloud Keychain Sync to pull accounts from your other devices, or import an encrypted backup file directly."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 20)
 
             HStack(spacing: 8) {
-                Button("Refresh Sync") {
-                    vault.reloadFromStore()
+                if vault.iCloudSyncEnabled {
+                    Button("Refresh Sync") {
+                        vault.reloadFromStore()
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Enable iCloud Keychain Sync") {
+                        vault.updateICloudSync(enabled: true, removeFromICloud: true)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
 
                 Button("Import Backup…") {
                     openBackupFilePanel()
@@ -523,24 +534,39 @@ struct MenuBarPopoverView: View {
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.secondary)
 
-                    HStack(spacing: 8) {
-                        Button(isReadingImport ? "Reading…" : "Import Backup…") {
-                            openBackupFilePanel()
-                        }
-                        .font(.caption.weight(.medium))
-                        .disabled(isReadingImport || isImporting)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("iCloud Keychain Sync", isOn: iCloudSyncBinding)
+                            .font(.caption.weight(.medium))
 
-                        Spacer()
-
-                        Button("Refresh Sync") {
-                            vault.reloadFromStore()
+                        if vault.hasPendingICloudCleanup && !vault.iCloudSyncEnabled {
+                            Button("Retry Clearing iCloud Copy", role: .destructive) {
+                                vault.retryPendingICloudCleanup()
+                            }
+                            .font(.caption.weight(.medium))
                         }
-                        .font(.caption.weight(.medium))
 
-                        Button("Quit", role: .destructive) {
-                            NSApp.terminate(nil)
+                        Divider()
+                            .opacity(0.35)
+
+                        HStack(spacing: 8) {
+                            Button(isReadingImport ? "Reading…" : "Import Backup…") {
+                                openBackupFilePanel()
+                            }
+                            .font(.caption.weight(.medium))
+                            .disabled(isReadingImport || isImporting)
+
+                            Spacer()
+
+                            Button("Refresh Sync") {
+                                vault.reloadFromStore()
+                            }
+                            .font(.caption.weight(.medium))
+
+                            Button("Quit", role: .destructive) {
+                                NSApp.terminate(nil)
+                            }
+                            .font(.caption.weight(.medium))
                         }
-                        .font(.caption.weight(.medium))
                     }
                     .padding(10)
                     .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -554,6 +580,38 @@ struct MenuBarPopoverView: View {
                 }
             }
             .padding(14)
+        }
+    }
+
+    private var iCloudSyncBinding: Binding<Bool> {
+        Binding(
+            get: { vault.iCloudSyncEnabled },
+            set: { newValue in
+                if newValue {
+                    vault.updateICloudSync(enabled: true, removeFromICloud: true)
+                } else {
+                    confirmDisableICloudSync()
+                }
+            }
+        )
+    }
+
+    private func confirmDisableICloudSync() {
+        let alert = NSAlert()
+        alert.messageText = "Turn Off iCloud Keychain Sync?"
+        alert.informativeText = "Clearing the iCloud copy writes a synchronizable empty retirement record and switches synced devices to local storage. Or keep the existing iCloud vault and switch only this Mac to local storage."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Turn Off & Clear iCloud Copy")
+        alert.addButton(withTitle: "Use Local-Only & Keep iCloud Copy")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            vault.updateICloudSync(enabled: false, removeFromICloud: true)
+        case .alertSecondButtonReturn:
+            vault.updateICloudSync(enabled: false, removeFromICloud: false)
+        default:
+            break
         }
     }
 

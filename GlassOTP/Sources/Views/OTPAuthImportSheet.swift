@@ -254,19 +254,29 @@ struct OTPAuthImportSheet: View {
     private var reviewStepView: some View {
         let existing = existingFingerprints
         let selectedAccounts = decryptedAccounts.filter { selectedAccountIDs.contains($0.id) }
-        let duplicateCount = selectedAccounts.filter { existing.contains($0.fingerprint) }.count
-        let finalImportCount = skipDuplicates ? (selectedAccounts.count - duplicateCount) : selectedAccounts.count
         let preserveEmpty = decryptedFormat == "GlassOTP Encrypted Backup"
             && selectedAccounts.count == decryptedAccounts.count
-        let previewPlan = VaultImportReconciler.reconcile(
+        let skippingPlan = VaultImportReconciler.reconcile(
             importedAccounts: selectedAccounts,
             importedFolders: decryptedFolders,
             existingAccounts: vault.accounts,
             existingFolders: vault.folders,
-            skipDuplicates: skipDuplicates,
+            skipDuplicates: true,
             preserveEmptyFolders: preserveEmpty
         )
-        let newFolderCount = max(0, previewPlan.folders.count - vault.folders.count)
+        let activePlan = skipDuplicates
+            ? skippingPlan
+            : VaultImportReconciler.reconcile(
+                importedAccounts: selectedAccounts,
+                importedFolders: decryptedFolders,
+                existingAccounts: vault.accounts,
+                existingFolders: vault.folders,
+                skipDuplicates: false,
+                preserveEmptyFolders: preserveEmpty
+            )
+        let duplicateCount = skippingPlan.skippedDuplicateCount
+        let finalImportCount = activePlan.addedCount
+        let newFolderCount = max(0, activePlan.folders.count - vault.folders.count)
         let canImport = finalImportCount > 0 || (preserveEmpty && newFolderCount > 0)
         let buttonTitle: String = {
             if finalImportCount == 0 && newFolderCount > 0 {
