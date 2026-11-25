@@ -70,7 +70,7 @@ struct CopyMacOTPIntent: AppIntent {
                 return false
             }
             snapshot.accounts[idx].counter &+= 1
-            snapshot.accounts[idx].updatedAt = now
+            snapshot.accounts[idx].updatedAt = Date.monotonicTimestamp(after: current.updatedAt, now: now)
             return true
         }
 

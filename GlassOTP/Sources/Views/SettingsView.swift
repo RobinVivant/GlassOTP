@@ -186,15 +186,15 @@ struct SettingsView: View {
             isPresented: $showingICloudDisableConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Turn Off & Delete iCloud Copy", role: .destructive) {
-                vault.updateICloudSync(enabled: false, removeFromICloud: true)
-            }
             Button("Use Local-Only & Keep iCloud Copy") {
                 vault.updateICloudSync(enabled: false, removeFromICloud: false)
             }
+            Button("Turn Off & Delete iCloud Copy", role: .destructive) {
+                vault.updateICloudSync(enabled: false, removeFromICloud: true)
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Clearing the iCloud copy replaces it with an empty retirement record and switches synced devices to local storage. Or keep the existing iCloud vault and switch only this device to local storage.")
+            Text("Deleting the iCloud copy writes a synchronizable empty retirement record so other devices running GlassOTP 1.2 or later switch to local storage with the vault they last loaded. Update and open your other devices first, or keep the iCloud copy and switch only this device to local storage.")
         }
         .sheet(isPresented: $showingExportPasswordPrompt, onDismiss: {
             exportOperationID = UUID()

@@ -76,6 +76,7 @@ final class VaultViewModel {
     @ObservationIgnored private var pendingIncomingURL: URL?
     @ObservationIgnored private var accountTombstones: [OTPTombstone] = []
     @ObservationIgnored private var folderTombstones: [OTPTombstone] = []
+    @ObservationIgnored private var hasCompletedInitialLoad = false
     private static let hideCodesKey = "glassotp.hideCodesInApp"
     private static let dismissBannerKey = "glassotp.dismissAutoCategorizeBanner"
 
@@ -138,11 +139,17 @@ final class VaultViewModel {
 
     private func applySnapshotToMemory(_ snapshot: OTPVaultSnapshot) {
         iCloudSyncEnabled = store.isICloudSyncEnabled()
-        folders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
-        accounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
+        let sortedFolders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
+        let sortedAccounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
+        if folders != sortedFolders {
+            folders = sortedFolders
+        }
+        if accounts != sortedAccounts {
+            accounts = sortedAccounts
+        }
         accountTombstones = snapshot.accountTombstones
         folderTombstones = snapshot.folderTombstones
-        if let selectedFolderID, !folders.contains(where: { $0.id == selectedFolderID }) {
+        if let selectedFolderID, !sortedFolders.contains(where: { $0.id == selectedFolderID }) {
             self.selectedFolderID = nil
         }
         hasLoadError = false
@@ -150,6 +157,11 @@ final class VaultViewModel {
     }
 
     func reloadFromStore() {
+        let prevFolders = folders
+        let prevAccounts = accounts
+        let prevSync = iCloudSyncEnabled
+        defer { hasCompletedInitialLoad = true }
+
         do {
             iCloudSyncEnabled = store.isICloudSyncEnabled()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
@@ -158,12 +170,16 @@ final class VaultViewModel {
                 applySnapshotToMemory(snapshot)
             } else {
                 iCloudSyncEnabled = store.isICloudSyncEnabled()
-                folders = []
-                accounts = []
+                if !folders.isEmpty { folders = [] }
+                if !accounts.isEmpty { accounts = [] }
                 accountTombstones = []
                 folderTombstones = []
                 selectedFolderID = nil
                 hasLoadError = false
+            }
+            if hasCompletedInitialLoad
+                && (folders != prevFolders || accounts != prevAccounts || iCloudSyncEnabled != prevSync) {
+                WidgetCenter.shared.reloadAllTimelines()
             }
         } catch {
             hasLoadError = true
@@ -199,9 +215,11 @@ final class VaultViewModel {
 
     func retryPendingICloudCleanup() {
         do {
-            try store.retryPendingICloudCleanup()
+            let cleaned = try store.retryPendingICloudCleanup()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
-            alertMessage = "Deleted the leftover iCloud Keychain copy."
+            if cleaned {
+                alertMessage = "Deleted the leftover iCloud Keychain copy."
+            }
         } catch {
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             alertMessage = error.localizedDescription
@@ -242,62 +260,75 @@ final class VaultViewModel {
         generator.notificationOccurred(.success)
     }
 
-    func copyCode(for account: OTPAccount, at date: Date = Date(), reloadWidgets: Bool = false) {
+    func copyCode(for account: OTPAccount, at date: Date? = nil, reloadWidgets: Bool = false) {
         guard !hasLoadError else {
             alertMessage = "Cannot copy codes because the existing Keychain vault could not be loaded."
             return
         }
 
-        var resolvedAccount: OTPAccount?
-        do {
-            if let updatedSnapshot = try store.mutateSnapshotIfPresent({ snapshot in
-                guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }) else {
-                    return false
+        let store = self.store
+        let accountID = account.id
+        Task { @MainActor in
+            var resolvedAccount: OTPAccount?
+            do {
+                let outcome = try await Task.detached(priority: .userInitiated) { () -> (updated: OTPVaultSnapshot?, resolved: OTPAccount?) in
+                    var resolved: OTPAccount?
+                    let updated = try store.mutateSnapshotIfPresent { snapshot in
+                        guard let idx = snapshot.accounts.firstIndex(where: { $0.id == accountID }) else {
+                            return false
+                        }
+                        let current = snapshot.accounts[idx]
+                        resolved = current
+                        guard current.isSupportedAlgorithm, current.type == .hotp else {
+                            return false
+                        }
+                        snapshot.accounts[idx].counter &+= 1
+                        snapshot.accounts[idx].updatedAt = Date.monotonicTimestamp(after: current.updatedAt, now: date ?? Date())
+                        return true
+                    }
+                    return (updated, resolved)
+                }.value
+
+                resolvedAccount = outcome.resolved
+                if let updatedSnapshot = outcome.updated {
+                    applySnapshotToMemory(updatedSnapshot)
+                } else {
+                    reloadFromStore()
+                    alertMessage = "That account is no longer in your vault."
+                    return
                 }
-                let current = snapshot.accounts[idx]
-                resolvedAccount = current
-                guard current.isSupportedAlgorithm, current.type == .hotp else {
-                    return false
-                }
-                snapshot.accounts[idx].counter &+= 1
-                snapshot.accounts[idx].updatedAt = date
-                return true
-            }) {
-                applySnapshotToMemory(updatedSnapshot)
-            } else {
-                reloadFromStore()
+            } catch {
+                alertMessage = error.localizedDescription
                 return
             }
-        } catch {
-            alertMessage = error.localizedDescription
-            return
-        }
 
-        guard let effectiveAccount = resolvedAccount else {
-            alertMessage = "That account is no longer in your vault."
-            return
-        }
-        guard effectiveAccount.isSupportedAlgorithm else {
-            alertMessage = "\(effectiveAccount.displayTitle) uses legacy \(effectiveAccount.algorithm.displayName), which GlassOTP no longer generates."
-            return
-        }
+            guard let effectiveAccount = resolvedAccount else {
+                alertMessage = "That account is no longer in your vault."
+                return
+            }
+            guard effectiveAccount.isSupportedAlgorithm else {
+                alertMessage = "\(effectiveAccount.displayTitle) uses legacy \(effectiveAccount.algorithm.displayName), which GlassOTP no longer generates."
+                return
+            }
 
-        let snapshot = OTPGenerator.snapshot(for: effectiveAccount, at: date)
-        OTPClipboardWriter.copyOTP(snapshot.code)
+            let generationDate = date ?? Date()
+            let snapshot = OTPGenerator.snapshot(for: effectiveAccount, at: generationDate)
+            OTPClipboardWriter.copyOTP(snapshot.code)
 
-        let generator = UINotificationFeedbackGenerator()
-        generator.prepare()
-        generator.notificationOccurred(.success)
+            let generator = UINotificationFeedbackGenerator()
+            generator.prepare()
+            generator.notificationOccurred(.success)
 
-        if UIApplication.shared.applicationState != .active {
-            pendingForegroundCopyCode = snapshot.code
+            if UIApplication.shared.applicationState != .active {
+                pendingForegroundCopyCode = snapshot.code
+            }
+
+            SharedWidgetStateStore.recordCopy(accountID: effectiveAccount.id, at: generationDate)
+            if reloadWidgets || effectiveAccount.type == .hotp {
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+            showToast(title: effectiveAccount.displayTitle, formattedCode: snapshot.formattedCode)
         }
-
-        SharedWidgetStateStore.recordCopy(accountID: effectiveAccount.id, at: date)
-        if reloadWidgets || effectiveAccount.type == .hotp {
-            WidgetCenter.shared.reloadAllTimelines()
-        }
-        showToast(title: effectiveAccount.displayTitle, formattedCode: snapshot.formattedCode)
     }
 
     func incrementHOTP(for account: OTPAccount) {
@@ -309,7 +340,6 @@ final class VaultViewModel {
             alertMessage = "Cannot save changes because the existing Keychain vault could not be loaded."
             return
         }
-        let now = Date()
         var found = false
         do {
             if let updated = try store.mutateSnapshotIfPresent({ snapshot in
@@ -319,7 +349,7 @@ final class VaultViewModel {
                 }
                 found = true
                 snapshot.accounts[idx].counter &+= 1
-                snapshot.accounts[idx].updatedAt = now
+                snapshot.accounts[idx].updatedAt = Date.monotonicTimestamp(after: snapshot.accounts[idx].updatedAt)
                 return true
             }), found {
                 applySnapshotToMemory(updated)
@@ -349,7 +379,7 @@ final class VaultViewModel {
         let prevAccounts = accounts
         guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[index].isPinned.toggle()
-        accounts[index].updatedAt = Date()
+        accounts[index].updatedAt = Date.monotonicTimestamp(after: accounts[index].updatedAt)
         if persist() {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         } else {
@@ -361,7 +391,7 @@ final class VaultViewModel {
         let prevAccounts = accounts
         guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[index].folderID = folderID
-        accounts[index].updatedAt = Date()
+        accounts[index].updatedAt = Date.monotonicTimestamp(after: accounts[index].updatedAt)
         if !persist() {
             accounts = prevAccounts
         }
@@ -373,7 +403,7 @@ final class VaultViewModel {
         let prevAccounts = accounts
         if let index = accounts.firstIndex(where: { $0.id == account.id }) {
             var updated = account
-            updated.updatedAt = Date()
+            updated.updatedAt = Date.monotonicTimestamp(after: accounts[index].updatedAt)
             accounts[index] = updated
         } else {
             var created = account
@@ -392,7 +422,7 @@ final class VaultViewModel {
         let prevAccounts = accounts
         let prevTombstones = accountTombstones
         let prevRevealed = revealedAccountIDs
-        accountTombstones.append(OTPTombstone(id: account.id, deletedAt: Date()))
+        accountTombstones.append(OTPTombstone(id: account.id, deletedAt: Date.monotonicTimestamp(after: account.updatedAt)))
         accounts.removeAll { $0.id == account.id }
         revealedAccountIDs.remove(account.id)
         if !persist() {
@@ -408,7 +438,7 @@ final class VaultViewModel {
         guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return false }
         accounts[index].customBrandSlug = brandSlug
         accounts[index].customLogoDomain = customDomain
-        accounts[index].updatedAt = Date()
+        accounts[index].updatedAt = Date.monotonicTimestamp(after: accounts[index].updatedAt)
         if persist() {
             bumpLogoRevision()
             WidgetCenter.shared.reloadAllTimelines()
@@ -501,7 +531,7 @@ final class VaultViewModel {
         let prevFolders = folders
         folders[index].name = trimmed
         folders[index].symbolName = symbolName
-        folders[index].updatedAt = Date()
+        folders[index].updatedAt = Date.monotonicTimestamp(after: folders[index].updatedAt)
         if !persist() {
             folders = prevFolders
             return false
@@ -515,12 +545,12 @@ final class VaultViewModel {
         let prevTombstones = folderTombstones
         let prevSelected = selectedFolderID
 
-        let now = Date()
-        folderTombstones.append(OTPTombstone(id: folder.id, deletedAt: now))
+        let deletedAt = Date.monotonicTimestamp(after: folder.updatedAt)
+        folderTombstones.append(OTPTombstone(id: folder.id, deletedAt: deletedAt))
         folders.removeAll { $0.id == folder.id }
         for idx in accounts.indices where accounts[idx].folderID == folder.id {
             accounts[idx].folderID = nil
-            accounts[idx].updatedAt = now
+            accounts[idx].updatedAt = Date.monotonicTimestamp(after: accounts[idx].updatedAt)
         }
         if selectedFolderID == folder.id {
             selectedFolderID = nil
@@ -683,7 +713,7 @@ final class VaultViewModel {
 
     private func cleanupInboxFileIfNeeded(_ url: URL) {
         guard url.isFileURL,
-              url.standardizedFileURL.path.contains("/Documents/Inbox/") else {
+              url.resolvingSymlinksInPath().standardizedFileURL.path.contains("/Documents/Inbox/") else {
             return
         }
         try? FileManager.default.removeItem(at: url)
@@ -700,10 +730,11 @@ final class VaultViewModel {
         ) else {
             return
         }
-        let pendingStandardized = pendingIncomingURL?.standardizedFileURL
+        let pendingResolved = pendingIncomingURL?.resolvingSymlinksInPath().standardizedFileURL
         let cutoff = Date().addingTimeInterval(-age)
         for fileURL in contents {
-            if let pendingStandardized, fileURL.standardizedFileURL == pendingStandardized {
+            if let pendingResolved,
+               fileURL.resolvingSymlinksInPath().standardizedFileURL == pendingResolved {
                 continue
             }
             let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])

@@ -19,6 +19,7 @@ struct MenuBarPopoverView: View {
     @State private var showingPasswordPrompt = false
     @State private var isReadingImport = false
     @State private var isImporting = false
+    @State private var showingICloudDisableConfirmation = false
 
     var body: some View {
         let displayed = vault.displayedAccounts
@@ -79,6 +80,21 @@ struct MenuBarPopoverView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(vault.alertMessage ?? "")
+        }
+        .confirmationDialog(
+            "Turn Off iCloud Keychain Sync?",
+            isPresented: $showingICloudDisableConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Use Local-Only & Keep iCloud Copy") {
+                vault.updateICloudSync(enabled: false, removeFromICloud: false)
+            }
+            Button("Turn Off & Delete iCloud Copy", role: .destructive) {
+                vault.updateICloudSync(enabled: false, removeFromICloud: true)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Deleting the iCloud copy writes a synchronizable empty retirement record so other devices running GlassOTP 1.2 or later switch to local storage with the vault they last loaded. Update and open your other devices first, or keep the iCloud copy and switch only this Mac to local storage.")
         }
     }
 
@@ -539,7 +555,7 @@ struct MenuBarPopoverView: View {
                             .font(.caption.weight(.medium))
 
                         if vault.hasPendingICloudCleanup && !vault.iCloudSyncEnabled {
-                            Button("Retry Clearing iCloud Copy", role: .destructive) {
+                            Button("Retry Deleting iCloud Copy", role: .destructive) {
                                 vault.retryPendingICloudCleanup()
                             }
                             .font(.caption.weight(.medium))
@@ -590,29 +606,10 @@ struct MenuBarPopoverView: View {
                 if newValue {
                     vault.updateICloudSync(enabled: true, removeFromICloud: true)
                 } else {
-                    confirmDisableICloudSync()
+                    showingICloudDisableConfirmation = true
                 }
             }
         )
-    }
-
-    private func confirmDisableICloudSync() {
-        let alert = NSAlert()
-        alert.messageText = "Turn Off iCloud Keychain Sync?"
-        alert.informativeText = "Clearing the iCloud copy writes a synchronizable empty retirement record and switches synced devices to local storage. Or keep the existing iCloud vault and switch only this Mac to local storage."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Turn Off & Clear iCloud Copy")
-        alert.addButton(withTitle: "Use Local-Only & Keep iCloud Copy")
-        alert.addButton(withTitle: "Cancel")
-        NSApp.activate(ignoringOtherApps: true)
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            vault.updateICloudSync(enabled: false, removeFromICloud: true)
-        case .alertSecondButtonReturn:
-            vault.updateICloudSync(enabled: false, removeFromICloud: false)
-        default:
-            break
-        }
     }
 
     private func passwordPromptContent(filename: String, data: Data) -> some View {
@@ -675,8 +672,10 @@ struct MenuBarPopoverView: View {
     }
 
     private func copyAndDismiss(_ account: OTPAccount) {
-        if vault.copyCode(for: account, fromDirectHotKey: false) {
-            onDismiss(true)
+        Task { @MainActor in
+            if await vault.copyCode(for: account, fromDirectHotKey: false) {
+                onDismiss(true)
+            }
         }
     }
 

@@ -187,7 +187,7 @@ public enum AccountCategorizer {
             }
 
             updatedAccounts[idx].folderID = folderID
-            updatedAccounts[idx].updatedAt = Date()
+            updatedAccounts[idx].updatedAt = Date.monotonicTimestamp(after: updatedAccounts[idx].updatedAt)
         }
 
         if removeEmptyDefaultFolder {
@@ -200,7 +200,7 @@ public enum AccountCategorizer {
 
         for idx in updatedFolders.indices where updatedFolders[idx].sortOrder != idx {
             updatedFolders[idx].sortOrder = idx
-            updatedFolders[idx].updatedAt = Date()
+            updatedFolders[idx].updatedAt = Date.monotonicTimestamp(after: updatedFolders[idx].updatedAt)
         }
 
         return (updatedFolders, updatedAccounts)

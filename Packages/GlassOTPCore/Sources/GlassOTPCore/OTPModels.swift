@@ -202,17 +202,17 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         let parts = [
             issuer,
             label,
-            folderID?.uuidString ?? "",
             isPinned ? "1" : "0",
             "\(sortOrder)",
             customBrandSlug ?? "",
             customLogoDomain ?? "",
             id.uuidString,
+            folderID?.uuidString ?? "",
         ]
         return parts.map { "\($0.utf8.count):\($0)" }.joined(separator: ",")
     }
 
-    internal var credentialTieBreakKey: String {
+    internal var credentialIdentityKey: String {
         let secretDigest = SHA256.hash(data: secret).map { String(format: "%02x", $0) }.joined()
         let resetMillis = counterResetAt.map { "\($0.roundedEpochMillis)" } ?? "none"
         let parts = [
@@ -220,7 +220,6 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
             algorithm.rawValue,
             "\(digits)",
             "\(period)",
-            "\(counter)",
             "\(credentialGeneration)",
             resetMillis,
             secretDigest,
@@ -384,10 +383,9 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         var mergedFolders: [OTPFolder] = []
         mergedFolders.reserveCapacity(folderMap.count)
         for (id, folder) in folderMap {
-            if let deletedAt = folderTombstoneMap[id], deletedAt >= folder.updatedAt {
+            if folderTombstoneMap[id] != nil {
                 continue
             }
-            folderTombstoneMap.removeValue(forKey: id)
             mergedFolders.append(folder)
         }
         mergedFolders.sort {
@@ -427,33 +425,19 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
                     : account.metadataTieBreakKey > existing.metadataTieBreakKey
                 var winner = incomingWinsMeta ? account : existing
 
-                let existingTuple = (existing.credentialGeneration, existing.counterResetAt?.roundedEpochMillis ?? Int64.min)
-                let incomingTuple = (account.credentialGeneration, account.counterResetAt?.roundedEpochMillis ?? Int64.min)
+                let existingCredOrder = (
+                    existing.credentialGeneration,
+                    existing.counterResetAt?.roundedEpochMillis ?? Int64.min,
+                    existing.credentialIdentityKey
+                )
+                let incomingCredOrder = (
+                    account.credentialGeneration,
+                    account.counterResetAt?.roundedEpochMillis ?? Int64.min,
+                    account.credentialIdentityKey
+                )
 
-                if incomingTuple != existingTuple {
-                    let resetSource = incomingTuple > existingTuple ? account : existing
-                    winner.secret = resetSource.secret
-                    winner.counter = resetSource.counter
-                    winner.counterResetAt = resetSource.counterResetAt
-                    winner.credentialGeneration = resetSource.credentialGeneration
-                    winner.type = resetSource.type
-                    winner.algorithm = resetSource.algorithm
-                    winner.digits = resetSource.digits
-                    winner.period = resetSource.period
-                    winner.updatedAt = max(existing.updatedAt, account.updatedAt)
-                } else if existing.type == .hotp && account.type == .hotp && existing.secret == account.secret {
-                    let maxCounter = max(existing.counter, account.counter)
-                    if winner.counter != maxCounter {
-                        winner.counter = maxCounter
-                        winner.updatedAt = max(existing.updatedAt, account.updatedAt)
-                    }
-                } else if existing.secret != account.secret
-                            || existing.type != account.type
-                            || existing.algorithm != account.algorithm
-                            || existing.digits != account.digits
-                            || existing.period != account.period
-                            || existing.counter != account.counter {
-                    let credSource = account.credentialTieBreakKey > existing.credentialTieBreakKey ? account : existing
+                if incomingCredOrder != existingCredOrder {
+                    let credSource = incomingCredOrder > existingCredOrder ? account : existing
                     winner.secret = credSource.secret
                     winner.counter = credSource.counter
                     winner.counterResetAt = credSource.counterResetAt
@@ -462,7 +446,17 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
                     winner.algorithm = credSource.algorithm
                     winner.digits = credSource.digits
                     winner.period = credSource.period
-                    winner.updatedAt = max(existing.updatedAt, account.updatedAt)
+                } else {
+                    winner.counter = max(existing.counter, account.counter)
+                }
+
+                winner.updatedAt = max(existing.updatedAt, account.updatedAt)
+                if existing.createdAt == .distantPast {
+                    winner.createdAt = account.createdAt
+                } else if account.createdAt == .distantPast {
+                    winner.createdAt = existing.createdAt
+                } else {
+                    winner.createdAt = min(existing.createdAt, account.createdAt)
                 }
                 accountMap[account.id] = winner
             } else {
@@ -473,10 +467,9 @@ public struct OTPVaultSnapshot: Codable, Sendable, Equatable {
         var mergedAccounts: [OTPAccount] = []
         mergedAccounts.reserveCapacity(accountMap.count)
         for (id, account) in accountMap {
-            if let deletedAt = accountTombstoneMap[id], deletedAt >= account.updatedAt {
+            if accountTombstoneMap[id] != nil {
                 continue
             }
-            accountTombstoneMap.removeValue(forKey: id)
             mergedAccounts.append(account)
         }
         mergedAccounts.sort {
@@ -528,6 +521,17 @@ extension Date {
         if scaled >= Double(Int64.max) { return Int64.max }
         if scaled <= Double(Int64.min) { return Int64.min }
         return Int64(scaled)
+    }
+
+    public static func monotonicTimestamp(after existing: Date?, now: Date = Date()) -> Date {
+        guard let existing else { return now }
+        let existingMillis = existing.roundedEpochMillis
+        let nowMillis = now.roundedEpochMillis
+        if nowMillis > existingMillis {
+            return now
+        }
+        let nextMillis = existingMillis < Int64.max ? existingMillis + 1 : Int64.max
+        return Date(timeIntervalSince1970: Double(nextMillis) / 1000.0)
     }
 }
 

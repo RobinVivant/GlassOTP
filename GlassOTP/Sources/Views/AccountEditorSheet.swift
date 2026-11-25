@@ -248,7 +248,7 @@ struct AccountEditorSheet: View {
                             isPinned: isPinned,
                             sortOrder: existingAccount?.sortOrder ?? vault.accounts.count,
                             createdAt: existingAccount?.createdAt ?? Date(),
-                            updatedAt: Date(),
+                            updatedAt: Date.monotonicTimestamp(after: existingAccount?.updatedAt),
                             counterResetAt: resolvedResetAt,
                             credentialGeneration: resolvedGeneration,
                             customBrandSlug: existingAccount?.customBrandSlug,

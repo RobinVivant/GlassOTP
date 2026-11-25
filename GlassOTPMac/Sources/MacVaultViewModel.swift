@@ -342,9 +342,11 @@ final class MacVaultViewModel {
 
     func retryPendingICloudCleanup() {
         do {
-            try store.retryPendingICloudCleanup()
+            let cleaned = try store.retryPendingICloudCleanup()
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
-            alertMessage = "Deleted the leftover iCloud Keychain copy."
+            if cleaned {
+                alertMessage = "Deleted the leftover iCloud Keychain copy."
+            }
         } catch {
             hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             alertMessage = error.localizedDescription
@@ -383,8 +385,24 @@ final class MacVaultViewModel {
     func copyCode(
         for account: OTPAccount,
         fromDirectHotKey: Bool = false,
-        surfaceExternalErrors: Bool = false
-    ) -> Bool {
+        surfaceExternalErrors: Bool = false,
+        capturedTargetPID: pid_t? = nil
+    ) async -> Bool {
+        await copyCode(
+            for: account.id,
+            fromDirectHotKey: fromDirectHotKey,
+            surfaceExternalErrors: surfaceExternalErrors,
+            capturedTargetPID: capturedTargetPID
+        )
+    }
+
+    @discardableResult
+    func copyCode(
+        for accountID: UUID,
+        fromDirectHotKey: Bool = false,
+        surfaceExternalErrors: Bool = false,
+        capturedTargetPID: pid_t? = nil
+    ) async -> Bool {
         func fail(_ message: String) -> Bool {
             if fromDirectHotKey || surfaceExternalErrors {
                 presentExternalAlert(title: "Copy Failed", message: message)
@@ -397,24 +415,32 @@ final class MacVaultViewModel {
         guard !hasLoadError else {
             return fail("Cannot copy codes because the existing Keychain vault could not be loaded.")
         }
-        let now = Date()
+
+        let store = self.store
         var resolvedAccount: OTPAccount?
 
         do {
             storeGeneration &+= 1
-            if let updatedSnapshot = try store.mutateSnapshotIfPresent({ snapshot in
-                guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }) else {
-                    return false
+            let outcome = try await Task.detached(priority: .userInitiated) { () -> (updated: OTPVaultSnapshot?, resolved: OTPAccount?) in
+                var resolved: OTPAccount?
+                let updated = try store.mutateSnapshotIfPresent { snapshot in
+                    guard let idx = snapshot.accounts.firstIndex(where: { $0.id == accountID }) else {
+                        return false
+                    }
+                    let current = snapshot.accounts[idx]
+                    resolved = current
+                    guard current.isSupportedAlgorithm, current.type == .hotp else {
+                        return false
+                    }
+                    snapshot.accounts[idx].counter &+= 1
+                    snapshot.accounts[idx].updatedAt = Date.monotonicTimestamp(after: current.updatedAt)
+                    return true
                 }
-                let current = snapshot.accounts[idx]
-                resolvedAccount = current
-                guard current.isSupportedAlgorithm, current.type == .hotp else {
-                    return false
-                }
-                snapshot.accounts[idx].counter &+= 1
-                snapshot.accounts[idx].updatedAt = now
-                return true
-            }) {
+                return (updated, resolved)
+            }.value
+
+            resolvedAccount = outcome.resolved
+            if let updatedSnapshot = outcome.updated {
                 applyLoadedSnapshot(updatedSnapshot)
             } else {
                 reloadFromStore()
@@ -432,15 +458,18 @@ final class MacVaultViewModel {
             return fail("\(effectiveAccount.displayTitle) uses legacy \(effectiveAccount.algorithm.displayName), which GlassOTP no longer generates.")
         }
 
-        let snapshot = OTPGenerator.snapshot(for: effectiveAccount, at: now, includeNextCode: false)
+        let generationDate = Date()
+        let snapshot = OTPGenerator.snapshot(for: effectiveAccount, at: generationDate, includeNextCode: false)
         MacClipboardWriter.copyOTP(snapshot.code)
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
 
-        let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let currentFrontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let targetPID = capturedTargetPID ?? currentFrontPID
         let willAutoType = fromDirectHotKey
             && autoTypeOnHotKey
             && AXIsProcessTrusted()
             && targetPID != nil
+            && targetPID == currentFrontPID
             && targetPID != ProcessInfo.processInfo.processIdentifier
         if willAutoType {
             scheduleAutoType(snapshot.code, targetPID: targetPID)
@@ -462,18 +491,21 @@ final class MacVaultViewModel {
         let prevAccounts = accounts
         guard let idx = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[idx].isPinned.toggle()
-        accounts[idx].updatedAt = Date()
+        accounts[idx].updatedAt = Date.monotonicTimestamp(after: accounts[idx].updatedAt)
         if !persist() {
             accounts = prevAccounts
         }
     }
 
     func handleAccountHotKey(_ accountID: UUID) {
-        if accounts.first(where: { $0.id == accountID }) == nil {
-            reloadFromStore()
+        let capturedTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        Task { @MainActor [weak self] in
+            _ = await self?.copyCode(
+                for: accountID,
+                fromDirectHotKey: true,
+                capturedTargetPID: capturedTargetPID
+            )
         }
-        guard let account = accounts.first(where: { $0.id == accountID }) else { return }
-        copyCode(for: account, fromDirectHotKey: true)
     }
 
     func handleIncomingURL(_ url: URL) {
@@ -482,9 +514,12 @@ final class MacVaultViewModel {
            url.host?.lowercased() == "account",
            let idString = url.pathComponents.dropFirst().first,
            let accountID = UUID(uuidString: idString) {
-            reloadFromStore()
-            if let match = accounts.first(where: { $0.id == accountID }) {
-                _ = copyCode(for: match, fromDirectHotKey: false, surfaceExternalErrors: true)
+            Task { @MainActor [weak self] in
+                _ = await self?.copyCode(
+                    for: accountID,
+                    fromDirectHotKey: false,
+                    surfaceExternalErrors: true
+                )
             }
         } else if scheme == "otpauth" || scheme == "otpauth-migration" {
             do {

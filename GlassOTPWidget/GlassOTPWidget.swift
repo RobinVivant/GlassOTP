@@ -221,6 +221,17 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                 formattedCode = "••• •••"
                 periodStart = date
                 periodEnd = date
+            } else if !isRevealed {
+                formattedCode = "••• •••"
+                if account.type == .totp && supported {
+                    let safePeriod = Double(account.period > 0 ? account.period : 30)
+                    let stepStart = floor(date.timeIntervalSince1970 / safePeriod) * safePeriod
+                    periodStart = Date(timeIntervalSince1970: stepStart)
+                    periodEnd = Date(timeIntervalSince1970: stepStart + safePeriod)
+                } else {
+                    periodStart = date
+                    periodEnd = date
+                }
             } else if supported {
                 let codeSnapshot = OTPGenerator.snapshot(for: account, at: date, includeNextCode: false)
                 formattedCode = codeSnapshot.formattedCode
@@ -354,6 +365,7 @@ struct GlassOTPWidgetEntryView: View {
                         .lineLimit(1)
                 }
             }
+            .privacySensitive(entry.isAppLocked)
 
             Spacer(minLength: 2)
 
@@ -393,6 +405,7 @@ struct GlassOTPWidgetEntryView: View {
                                         .lineLimit(1)
                                 }
                             }
+                            .privacySensitive(entry.isAppLocked)
 
                             Spacer(minLength: 4)
 
@@ -429,6 +442,7 @@ struct GlassOTPWidgetEntryView: View {
                     Text(item.title)
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
+                        .privacySensitive(entry.isAppLocked)
                     Spacer(minLength: 4)
                     if !item.isHOTP && item.isSupportedAlgorithm && !entry.isAppLocked {
                         Text(item.periodEnd, style: .timer)

@@ -679,8 +679,147 @@ struct OTPCoreTests {
         #expect(mergedAfterManyDeletes.folders.contains(where: { $0.id == unseenFolderID }))
     }
 
-    @Test("Snapshot merge is commutative and idempotent across 500 randomized states")
-    func snapshotMergeCommutativeAndIdempotentFuzz() {
+    @Test("Three-way merge of rotation, deletion, and stale rename is order-independent")
+    func threeWayMergeRotationDeleteAndStaleRename() {
+        let id = UUID()
+        let t1 = Date(timeIntervalSince1970: 1_700_000_000)
+        let t2 = Date(timeIntervalSince1970: 1_700_000_010)
+        let t3 = Date(timeIntervalSince1970: 1_700_000_020)
+        let t4 = Date(timeIntervalSince1970: 1_700_000_030)
+
+        let rotated = OTPVaultSnapshot(
+            accounts: [
+                OTPAccount(
+                    id: id,
+                    issuer: "Service",
+                    label: "a",
+                    secret: Data("new-secret".utf8),
+                    createdAt: t1,
+                    updatedAt: t2,
+                    counterResetAt: t2,
+                    credentialGeneration: 1
+                ),
+            ],
+            updatedAt: t2
+        )
+        let deleted = OTPVaultSnapshot(
+            accounts: [],
+            updatedAt: t3,
+            accountTombstones: [OTPTombstone(id: id, deletedAt: t3)]
+        )
+        let staleRenamed = OTPVaultSnapshot(
+            accounts: [
+                OTPAccount(
+                    id: id,
+                    issuer: "Service-Renamed",
+                    label: "a",
+                    secret: Data("old-secret".utf8),
+                    createdAt: t1,
+                    updatedAt: t4,
+                    counterResetAt: nil,
+                    credentialGeneration: 0
+                ),
+            ],
+            updatedAt: t4
+        )
+
+        let orders = [
+            rotated.merged(with: deleted).merged(with: staleRenamed),
+            rotated.merged(with: staleRenamed).merged(with: deleted),
+            deleted.merged(with: rotated).merged(with: staleRenamed),
+            deleted.merged(with: staleRenamed).merged(with: rotated),
+            staleRenamed.merged(with: rotated).merged(with: deleted),
+            staleRenamed.merged(with: deleted).merged(with: rotated),
+        ]
+        for result in orders {
+            #expect(result.accounts.isEmpty)
+            #expect(result.accountTombstones.map(\.id) == [id])
+            #expect(result == orders[0])
+        }
+    }
+
+    @Test("Equal-generation HOTP parameter conflicts and differing createdAt merge commutatively")
+    func equalGenerationHOTPParameterConflictAndCreatedAt() {
+        let id = UUID()
+        let t1 = Date(timeIntervalSince1970: 1_700_000_050)
+        let tEarlier = Date(timeIntervalSince1970: 1_699_000_000)
+        let sharedSecret = Data("hotp-secret".utf8)
+
+        let hotpSHA1 = OTPVaultSnapshot(
+            accounts: [
+                OTPAccount(
+                    id: id,
+                    issuer: "NAS",
+                    label: "ops",
+                    secret: sharedSecret,
+                    type: .hotp,
+                    algorithm: .sha1,
+                    digits: 6,
+                    period: 30,
+                    counter: 5,
+                    createdAt: .distantPast,
+                    updatedAt: t1
+                ),
+            ],
+            updatedAt: t1
+        )
+        let hotpSHA256 = OTPVaultSnapshot(
+            accounts: [
+                OTPAccount(
+                    id: id,
+                    issuer: "NAS",
+                    label: "ops",
+                    secret: sharedSecret,
+                    type: .hotp,
+                    algorithm: .sha256,
+                    digits: 8,
+                    period: 60,
+                    counter: 9,
+                    createdAt: tEarlier,
+                    updatedAt: t1
+                ),
+            ],
+            updatedAt: t1
+        )
+
+        let ab = hotpSHA1.merged(with: hotpSHA256)
+        let ba = hotpSHA256.merged(with: hotpSHA1)
+        #expect(ab == ba)
+        #expect(ab.accounts[0].createdAt == tEarlier)
+    }
+
+    @Test("Clock-skewed accounts honor delete and Date.monotonicTimestamp stays ahead across round-trips")
+    func clockSkewDeleteAndMonotonicTimestamp() throws {
+        let id = UUID()
+        let futureDate = Date(timeIntervalSince1970: 1_795_600_120.005)
+        let pastDate = Date(timeIntervalSince1970: 1_795_600_000)
+
+        let skewedAccount = OTPAccount(
+            id: id,
+            issuer: "Skewed",
+            label: "u",
+            secret: Data("abc".utf8),
+            updatedAt: futureDate
+        )
+        let deletedWithOlderClock = OTPVaultSnapshot(
+            accounts: [],
+            updatedAt: pastDate,
+            accountTombstones: [OTPTombstone(id: id, deletedAt: pastDate)]
+        )
+        let merged = OTPVaultSnapshot(accounts: [skewedAccount], updatedAt: futureDate)
+            .merged(with: deletedWithOlderClock)
+        #expect(merged.accounts.isEmpty)
+
+        let bumped = Date.monotonicTimestamp(after: futureDate, now: pastDate)
+        #expect(bumped > futureDate)
+        let decoded = try VaultSnapshotCoder.decode(from: VaultSnapshotCoder.encode(
+            OTPVaultSnapshot(accounts: [OTPAccount(issuer: "S", label: "u", secret: Data("1".utf8), updatedAt: bumped)])
+        ))
+        #expect(decoded.accounts[0].updatedAt.roundedEpochMillis > futureDate.roundedEpochMillis)
+    }
+
+    @Test("Snapshot merge is commutative, associative, and idempotent across 500 randomized triples")
+    func snapshotMergeSemilatticeProperties500Triples() {
         struct SplitMix64: RandomNumberGenerator {
             private var state: UInt64
             init(seed: UInt64) { self.state = seed }
@@ -698,7 +837,7 @@ struct OTPCoreTests {
         let baseMillis: Int64 = 1_795_600_000_000
         let secrets = [Data([1, 2, 3]), Data([4, 5, 6]), Data([7, 8, 9])]
         let algos: [OTPAlgorithm] = [.sha1, .sha256, .sha512]
-        var rng = SplitMix64(seed: 0x474C4F54505F5234)
+        var rng = SplitMix64(seed: 0x474C4F54505F5235)
 
         func makeRandomDate(_ rng: inout SplitMix64) -> Date {
             let offsetMillis = Int64(rng.next() % 20) * 150
@@ -723,6 +862,7 @@ struct OTPCoreTests {
                     folderTombstones.append(OTPTombstone(id: fid, deletedAt: makeRandomDate(&rng)))
                 }
             }
+            let activeFolderIDs = folders.map(\.id)
 
             var accounts: [OTPAccount] = []
             var accountTombstones: [OTPTombstone] = []
@@ -731,7 +871,12 @@ struct OTPCoreTests {
                 if pick < 2 {
                     let type: OTPType = (rng.next() % 2 == 0) ? .totp : .hotp
                     let hasReset = (rng.next() % 3 == 0)
-                    let assignedFolder: UUID? = (rng.next() % 3 == 0) ? nil : folderPool[Int(rng.next() % UInt64(folderPool.count))]
+                    let assignedFolder: UUID? = (activeFolderIDs.isEmpty || rng.next() % 3 == 0)
+                        ? nil
+                        : activeFolderIDs[Int(rng.next() % UInt64(activeFolderIDs.count))]
+                    let createdAt: Date = (rng.next() % 4 == 0)
+                        ? .distantPast
+                        : Date(timeIntervalSince1970: Double(baseMillis - Int64((rng.next() % 5) + 1) * 1_000) / 1000.0)
                     accounts.append(
                         OTPAccount(
                             id: aid,
@@ -746,7 +891,7 @@ struct OTPCoreTests {
                             folderID: assignedFolder,
                             isPinned: rng.next() % 2 == 0,
                             sortOrder: Int(rng.next() % 10),
-                            createdAt: Date(timeIntervalSince1970: Double(baseMillis - 10_000) / 1000.0),
+                            createdAt: createdAt,
                             updatedAt: makeRandomDate(&rng),
                             counterResetAt: hasReset ? makeRandomDate(&rng) : nil,
                             credentialGeneration: rng.next() % 4
@@ -772,11 +917,12 @@ struct OTPCoreTests {
         for _ in 0..<500 {
             let a = makeRandomSnapshot(&rng)
             let b = makeRandomSnapshot(&rng)
+            let c = makeRandomSnapshot(&rng)
             let ab = a.merged(with: b)
-            let ba = b.merged(with: a)
-            #expect(ab == ba)
+            #expect(ab == b.merged(with: a))
             #expect(ab.merged(with: b) == ab)
             #expect(ab.merged(with: a) == ab)
+            #expect(ab.merged(with: c) == a.merged(with: b.merged(with: c)))
         }
     }
 }
