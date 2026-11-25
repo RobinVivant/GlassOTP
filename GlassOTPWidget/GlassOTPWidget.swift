@@ -8,7 +8,11 @@ struct OTPWidgetItem: Identifiable, Sendable {
     let title: String
     let subtitle: String
     let accentHex: String
+    let secondaryHex: String
     let symbolName: String
+    let brandSlug: String?
+    let usesDarkGlyph: Bool
+    let cachedLogoDomain: String?
     let isHOTP: Bool
     let formattedCode: String
     let periodStart: Date
@@ -36,8 +40,12 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                     id: UUID(),
                     title: "GitHub",
                     subtitle: "robin@vero.io",
-                    accentHex: "#6E5494",
+                    accentHex: "#2A3346",
+                    secondaryHex: "#141A26",
                     symbolName: "chevron.left.forwardslash.chevron.right",
+                    brandSlug: "github",
+                    usesDarkGlyph: false,
+                    cachedLogoDomain: "github.com",
                     isHOTP: false,
                     formattedCode: "482 917",
                     periodStart: now,
@@ -50,7 +58,11 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                     title: "Cloudflare",
                     subtitle: "infra@vero.io",
                     accentHex: "#F38020",
+                    secondaryHex: "#AE5C17",
                     symbolName: "bolt.shield.fill",
+                    brandSlug: "cloudflare",
+                    usesDarkGlyph: false,
+                    cachedLogoDomain: "cloudflare.com",
                     isHOTP: false,
                     formattedCode: "910 342",
                     periodStart: now,
@@ -130,13 +142,19 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
             let isRevealed = !requireTapToReveal || SharedWidgetStateStore.isRevealed(accountID: account.id, now: date)
             let wasCopied = SharedWidgetStateStore.wasRecentlyCopied(accountID: account.id, now: date)
             let brand = account.brandStyle
+            let matchedBrand = BrandCatalog.shared.match(account: account)
+            let cachedDomain = BrandCatalog.shared.inferredDomain(for: account, includeHeuristicFallback: true)
 
             return OTPWidgetItem(
                 id: account.id,
                 title: account.displayTitle,
                 subtitle: account.displaySubtitle,
                 accentHex: brand.accentHex,
+                secondaryHex: brand.secondaryHex,
                 symbolName: brand.symbolName,
+                brandSlug: matchedBrand?.slug,
+                usesDarkGlyph: matchedBrand?.usesDarkGlyph ?? false,
+                cachedLogoDomain: cachedDomain,
                 isHOTP: account.type == .hotp,
                 formattedCode: codeSnapshot.formattedCode,
                 periodStart: codeSnapshot.periodStart,
@@ -210,11 +228,7 @@ struct GlassOTPWidgetEntryView: View {
     private func smallView(item: OTPWidgetItem) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: item.symbolName)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 26, height: 26)
-                    .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                WidgetBrandBadge(item: item, size: 26)
                     .widgetAccentable()
 
                 Spacer()
@@ -258,11 +272,7 @@ struct GlassOTPWidgetEntryView: View {
                 HStack(spacing: 10) {
                     Link(destination: URL(string: "glassotp://account/\(item.id.uuidString)")!) {
                         HStack(spacing: 10) {
-                            Image(systemName: item.symbolName)
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 30, height: 30)
-                                .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            WidgetBrandBadge(item: item, size: 30)
                                 .widgetAccentable()
 
                             VStack(alignment: .leading, spacing: 1) {
@@ -358,11 +368,15 @@ struct GlassOTPWidgetEntryView: View {
             Text("••• •••")
                 .font(.system(size: size, weight: .bold, design: .rounded))
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
                 .foregroundStyle(.secondary)
         } else {
             Text(item.formattedCode)
                 .font(.system(size: size, weight: .bold, design: .rounded))
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
                 .widgetAccentable()
         }
     }
@@ -420,5 +434,89 @@ struct GlassOTPWidget: Widget {
 struct GlassOTPWidgetBundle: WidgetBundle {
     var body: some Widget {
         GlassOTPWidget()
+    }
+}
+
+private struct WidgetVectorShape: Shape {
+    let svgPath: String
+
+    func path(in rect: CGRect) -> Path {
+        guard let cgPath = SVGPathParser.parse(svgPath) else { return Path() }
+        let box = cgPath.boundingBoxOfPath
+        guard box.width > 0, box.height > 0 else { return Path() }
+
+        let referenceSpan = max(24.0, max(box.width, box.height))
+        let scale = min(rect.width, rect.height) / referenceSpan
+        let scaledWidth = box.width * scale
+        let scaledHeight = box.height * scale
+        let offsetX = rect.minX + (rect.width - scaledWidth) / 2.0 - box.minX * scale
+        let offsetY = rect.minY + (rect.height - scaledHeight) / 2.0 - box.minY * scale
+
+        var transform = CGAffineTransform(translationX: offsetX, y: offsetY)
+            .scaledBy(x: scale, y: scale)
+        guard let transformed = cgPath.copy(using: &transform) else {
+            return Path(cgPath)
+        }
+        return Path(transformed)
+    }
+}
+
+private struct WidgetBrandBadge: View {
+    let item: OTPWidgetItem
+    let size: CGFloat
+
+    var body: some View {
+        let matchedBrand = item.brandSlug.flatMap { BrandCatalog.shared.brand(slug: $0) }
+        let cachedPNG: UIImage? = item.cachedLogoDomain
+            .flatMap { BrandLogoCache.loadPNGData(forDomain: $0) }
+            .flatMap { UIImage(data: $0) }
+        let cornerRadius = size * 0.28
+
+        ZStack {
+            if let cachedPNG, matchedBrand?.svgPath == nil {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                Image(uiImage: cachedPNG)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size * 0.70, height: size * 0.70)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius * 0.6, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [widgetColor(item.accentHex), widgetColor(item.secondaryHex)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+
+                if let svgPath = matchedBrand?.svgPath {
+                    WidgetVectorShape(svgPath: svgPath)
+                        .fill(item.usesDarkGlyph ? Color(red: 0.07, green: 0.09, blue: 0.15) : .white)
+                        .frame(width: size * 0.56, height: size * 0.56)
+                } else {
+                    Image(systemName: item.symbolName)
+                        .font(.system(size: size * 0.42, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    private func widgetColor(_ hex: String) -> Color {
+        let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: cleaned).scanHexInt64(&int)
+        guard cleaned.count == 6 else { return Color.accentColor }
+        return Color(
+            .sRGB,
+            red: Double((int >> 16) & 0xFF) / 255.0,
+            green: Double((int >> 8) & 0xFF) / 255.0,
+            blue: Double(int & 0xFF) / 255.0,
+            opacity: 1.0
+        )
     }
 }

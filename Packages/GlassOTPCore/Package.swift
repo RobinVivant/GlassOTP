@@ -15,7 +15,10 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "GlassOTPCore"
+            name: "GlassOTPCore",
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .testTarget(
             name: "GlassOTPCoreTests",

@@ -34,8 +34,17 @@ final class VaultViewModel {
     var showingImportSheet = false
     var showingScannerSheet = false
     var showingNewAccountSheet = false
+    var showingAutoCategorizeSheet = false
     var editingAccount: OTPAccount?
     var qrDetailAccount: OTPAccount?
+    var brandPickerAccount: OTPAccount?
+    var logoCacheRevision: Int = 0
+
+    var dismissedAutoCategorizeBanner: Bool {
+        didSet {
+            UserDefaults.standard.set(dismissedAutoCategorizeBanner, forKey: Self.dismissBannerKey)
+        }
+    }
 
     var iCloudSyncEnabled: Bool {
         didSet {
@@ -54,12 +63,19 @@ final class VaultViewModel {
     private let store: KeychainVaultStore
     private var toastDismissTask: Task<Void, Never>?
     private static let hideCodesKey = "glassotp.hideCodesInApp"
+    private static let dismissBannerKey = "glassotp.dismissAutoCategorizeBanner"
 
     init(store: KeychainVaultStore = .shared) {
         self.store = store
         self.iCloudSyncEnabled = store.isICloudSyncEnabled()
         self.hideCodesInApp = UserDefaults.standard.bool(forKey: Self.hideCodesKey)
+        self.dismissedAutoCategorizeBanner = UserDefaults.standard.bool(forKey: Self.dismissBannerKey)
         reloadFromStore()
+    }
+
+    var shouldSuggestAutoCategorize: Bool {
+        guard !accounts.isEmpty, !dismissedAutoCategorizeBanner else { return false }
+        return AccountCategorizer.buildPlan(accounts: accounts, folders: folders).hasUncategorizedOrDefaultOnly
     }
 
     var pinnedAccounts: [OTPAccount] {
@@ -191,6 +207,45 @@ final class VaultViewModel {
         accounts.removeAll { $0.id == account.id }
         revealedAccountIDs.remove(account.id)
         persist()
+    }
+
+    func updateBrandOverride(for account: OTPAccount, brandSlug: String?, customDomain: String?) {
+        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
+        accounts[index].customBrandSlug = brandSlug
+        accounts[index].customLogoDomain = customDomain
+        accounts[index].updatedAt = Date()
+        bumpLogoRevision()
+        persist()
+    }
+
+    func applyCategorization(_ assignments: [UUID: OTPCategory], removeEmptyDefaultFolder: Bool) {
+        let result = AccountCategorizer.apply(
+            assignments: assignments,
+            toAccounts: accounts,
+            existingFolders: folders,
+            removeEmptyDefaultFolder: removeEmptyDefaultFolder
+        )
+        folders = result.folders
+        accounts = result.accounts
+        if let selected = selectedFolderID, !folders.contains(where: { $0.id == selected }) {
+            selectedFolderID = nil
+        }
+        dismissedAutoCategorizeBanner = true
+        persist()
+    }
+
+    @discardableResult
+    func fetchMissingWebLogos() async -> Int {
+        let fetched = await BrandLogoFetcher.fetchMissingLogos(for: accounts)
+        if fetched > 0 {
+            bumpLogoRevision()
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+        return fetched
+    }
+
+    func bumpLogoRevision() {
+        logoCacheRevision &+= 1
     }
 
     func addFolder(name: String, symbolName: String) {
@@ -326,17 +381,16 @@ final class VaultViewModel {
 
     #if DEBUG
     func seedDemoDataIfNeeded() {
-        let personal = OTPFolder(name: "Personal", symbolName: "house.fill", sortOrder: 0)
-        let work = OTPFolder(name: "Work", symbolName: "briefcase.fill", sortOrder: 1)
-        let infra = OTPFolder(name: "Infra", symbolName: "server.rack", sortOrder: 2)
+        let defaultFolder = OTPFolder(name: "Accounts", symbolName: "folder.fill", sortOrder: 0)
+        dismissedAutoCategorizeBanner = false
 
-        folders = [personal, work, infra]
+        folders = [defaultFolder]
         accounts = [
             OTPAccount(
                 issuer: "GitHub",
                 label: "robin@vero.io",
                 secret: Data("JBSWY3DPEHPK3PXP".utf8),
-                folderID: work.id,
+                folderID: defaultFolder.id,
                 isPinned: true,
                 sortOrder: 0
             ),
@@ -344,7 +398,7 @@ final class VaultViewModel {
                 issuer: "Cloudflare",
                 label: "infra-prod@vero.io",
                 secret: Data("MZXW6YTBOI======".utf8),
-                folderID: infra.id,
+                folderID: defaultFolder.id,
                 isPinned: true,
                 sortOrder: 1
             ),
@@ -355,7 +409,7 @@ final class VaultViewModel {
                 algorithm: .sha256,
                 digits: 6,
                 period: 30,
-                folderID: infra.id,
+                folderID: defaultFolder.id,
                 isPinned: true,
                 sortOrder: 2
             ),
@@ -363,7 +417,7 @@ final class VaultViewModel {
                 issuer: "Google",
                 label: "robin.vivant@gmail.com",
                 secret: Data("KRUGS4ZANFZSAYJA".utf8),
-                folderID: personal.id,
+                folderID: defaultFolder.id,
                 isPinned: false,
                 sortOrder: 3
             ),
@@ -371,19 +425,33 @@ final class VaultViewModel {
                 issuer: "1Password",
                 label: "family-vault",
                 secret: Data("ONSWG4TFOQYTEMZU".utf8),
-                folderID: personal.id,
+                folderID: defaultFolder.id,
                 isPinned: false,
                 sortOrder: 4
             ),
             OTPAccount(
-                issuer: "Heim-NAS",
-                label: "admin@nas.local",
-                secret: Data("dhfv87ds".utf8),
-                type: .hotp,
-                counter: 7,
-                folderID: infra.id,
+                issuer: "Stripe",
+                label: "billing@vero.io",
+                secret: Data("JBSWY3DPEHPK3PXP".utf8),
+                folderID: defaultFolder.id,
                 isPinned: false,
                 sortOrder: 5
+            ),
+            OTPAccount(
+                issuer: "Discord",
+                label: "robin#0001",
+                secret: Data("MZXW6YTBOI======".utf8),
+                folderID: defaultFolder.id,
+                isPinned: false,
+                sortOrder: 6
+            ),
+            OTPAccount(
+                issuer: "Steam",
+                label: "rvivant",
+                secret: Data("GEZDGNBVGY3TQOJQ".utf8),
+                folderID: defaultFolder.id,
+                isPinned: false,
+                sortOrder: 7
             ),
         ]
         persist()

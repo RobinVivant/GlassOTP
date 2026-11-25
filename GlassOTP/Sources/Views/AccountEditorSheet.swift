@@ -113,6 +113,19 @@ struct AccountEditorSheet: View {
                                 }
                             }
                         }
+
+                        if let existingAccount {
+                            Button {
+                                dismiss()
+                                vault.brandPickerAccount = existingAccount
+                            } label: {
+                                HStack {
+                                    Label("Service Logo", systemImage: "sparkles")
+                                    Spacer()
+                                    BrandAvatarView(account: existingAccount, size: 28, logoRevision: vault.logoCacheRevision)
+                                }
+                            }
+                        }
                     }
 
                     Section {
@@ -171,7 +184,9 @@ struct AccountEditorSheet: View {
                             isPinned: isPinned,
                             sortOrder: existingAccount?.sortOrder ?? vault.accounts.count,
                             createdAt: existingAccount?.createdAt ?? Date(),
-                            updatedAt: Date()
+                            updatedAt: Date(),
+                            customBrandSlug: existingAccount?.customBrandSlug,
+                            customLogoDomain: existingAccount?.customLogoDomain
                         )
                         vault.upsertAccount(updated)
                         dismiss()

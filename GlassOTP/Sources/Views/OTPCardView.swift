@@ -16,7 +16,7 @@ struct PinnedOTPCardView: View {
         } label: {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
-                    BrandAvatarView(style: brand, size: 32)
+                    BrandAvatarView(account: account, size: 32, logoRevision: vault.logoCacheRevision)
                     Spacer()
                     if account.type == .totp {
                         CountdownRingView(
@@ -46,6 +46,8 @@ struct PinnedOTPCardView: View {
                 Text(isVisible ? snapshot.formattedCode : "••• •••")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                     .contentTransition(.numericText())
                     .foregroundStyle(
                         account.type == .totp && snapshot.remainingSeconds <= 5
@@ -86,10 +88,9 @@ struct OTPCardView: View {
         let snapshot = OTPGenerator.snapshot(for: account, at: date)
         let isVisible = vault.isCodeVisible(for: account.id)
         let isExpiring = account.type == .totp && snapshot.remainingSeconds <= 5
-        let brand = account.brandStyle
 
         HStack(spacing: 14) {
-            BrandAvatarView(style: brand, size: 46)
+            BrandAvatarView(account: account, size: 46, logoRevision: vault.logoCacheRevision)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -121,26 +122,18 @@ struct OTPCardView: View {
                         .lineLimit(1)
                 }
 
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(isVisible ? snapshot.formattedCode : "••• •••")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                        .foregroundStyle(isExpiring ? Color.red : Color.primary)
-
-                    if isVisible, isExpiring, let next = snapshot.formattedNextCode {
-                        Text("Next \(next)")
-                            .font(.caption2.weight(.semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .transition(.opacity)
-                    }
-                }
+                Text(isVisible ? snapshot.formattedCode : "••• •••")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .contentTransition(.numericText())
+                    .foregroundStyle(isExpiring ? Color.red : Color.primary)
             }
 
             Spacer(minLength: 8)
 
-            trailingControl(snapshot: snapshot, isVisible: isVisible)
+            trailingControl(snapshot: snapshot, isVisible: isVisible, isExpiring: isExpiring)
         }
         .padding(14)
         .background(
@@ -193,6 +186,12 @@ struct OTPCardView: View {
             }
 
             Button {
+                vault.brandPickerAccount = account
+            } label: {
+                Label("Change Service Logo", systemImage: "sparkles.square.filled.on.square")
+            }
+
+            Button {
                 vault.qrDetailAccount = account
             } label: {
                 Label("Show QR Code", systemImage: "qrcode")
@@ -215,14 +214,24 @@ struct OTPCardView: View {
     }
 
     @ViewBuilder
-    private func trailingControl(snapshot: OTPCodeSnapshot, isVisible: Bool) -> some View {
-        VStack(alignment: .trailing, spacing: 8) {
+    private func trailingControl(snapshot: OTPCodeSnapshot, isVisible: Bool, isExpiring: Bool) -> some View {
+        VStack(alignment: .trailing, spacing: 4) {
             if account.type == .totp {
                 CountdownRingView(
                     remainingSeconds: snapshot.remainingSeconds,
                     progress: snapshot.progress,
                     size: 36
                 )
+
+                if let next = snapshot.formattedNextCode {
+                    Text("→ \(next)")
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .foregroundStyle(.secondary)
+                        .opacity(isVisible && isExpiring ? 1 : 0)
+                }
             } else {
                 Button {
                     vault.incrementHOTP(for: account)
@@ -246,5 +255,6 @@ struct OTPCardView: View {
                 .buttonStyle(.plain)
             }
         }
+        .frame(minWidth: 58, alignment: .trailing)
     }
 }

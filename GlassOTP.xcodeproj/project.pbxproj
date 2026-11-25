@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		00351B365E1744A66F71B2F3 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BCA40793082F5FF0338C65B /* DesignSystem.swift */; };
+		02A054D4DE3F50DD6C31776D /* BrandLogoFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C7120C917145D21689E820 /* BrandLogoFetcher.swift */; };
 		28B42BF711499C5575132465 /* OTPCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C40D0314FC4881D1AC573F6E /* OTPCardView.swift */; };
 		5A7910CEA36108A34B4C7711 /* OTPWidgetIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E162C1B68F1B0706930909D6 /* OTPWidgetIntents.swift */; };
 		6A712E074B7DE9A273F64DDC /* VaultHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BA990EBAB0B5EBFF445AAC5 /* VaultHomeView.swift */; };
@@ -15,11 +16,13 @@
 		7AC48D86115DA5EB572B1344 /* GlassOTPWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2E48BB15F978C2031033C90 /* GlassOTPWidget.swift */; };
 		7DB141796309FBDD1BF4F7BE /* GlassOTPCore in Frameworks */ = {isa = PBXBuildFile; productRef = 44F9253C87A4A938F90C3A29 /* GlassOTPCore */; };
 		8388B499BD83D98EDBEEB685 /* GlassOTPWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C2E009883A7973278D529460 /* GlassOTPWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		84A2567558AB6B89521DC5B2 /* BrandPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A892272790C2A4BF3CE776AF /* BrandPickerSheet.swift */; };
 		85E6EC2E914A07E1F33A46EF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 64F57F1FE83BCA82AB97DE76 /* Assets.xcassets */; };
 		9F5DCB7424BE57FB2A515F72 /* GlassOTPCore in Frameworks */ = {isa = PBXBuildFile; productRef = 133EA85F372A6E078773D010 /* GlassOTPCore */; };
 		A04881A92B70B2878BA2B69B /* BiometricLockOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CF65E83347CE7090B421C2D /* BiometricLockOverlay.swift */; };
 		A4F517900253B49E5E575A04 /* BiometricLockManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A2FBF4498DD3D22125408AC /* BiometricLockManager.swift */; };
 		A546BC2E54BED5D2828845B8 /* OTPAuthImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 283B9C8C4CDC67212DD2BF7B /* OTPAuthImportSheet.swift */; };
+		A59511778699BD165C08A736 /* AutoCategorizeSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F425EC8855D595BBC6353076 /* AutoCategorizeSheet.swift */; };
 		BD4729DDAFC4CF9971CAF2A4 /* AccountQRDetailSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 149761E09AFDC6C4F600434F /* AccountQRDetailSheet.swift */; };
 		E01279E81EE0B05DADCBA3D2 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17889AC70F5DF240C4A9326F /* RootTabView.swift */; };
 		E9E0C8448E8B78BD3CA45FA2 /* AccountEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DDC569CABAA0C72912CE28E /* AccountEditorSheet.swift */; };
@@ -69,6 +72,8 @@
 		7308BE5A7E0C29EC146D8E79 /* GlassOTPCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GlassOTPCore; path = Packages/GlassOTPCore; sourceTree = SOURCE_ROOT; };
 		7A2FBF4498DD3D22125408AC /* BiometricLockManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiometricLockManager.swift; sourceTree = "<group>"; };
 		9DDC569CABAA0C72912CE28E /* AccountEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountEditorSheet.swift; sourceTree = "<group>"; };
+		A2C7120C917145D21689E820 /* BrandLogoFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandLogoFetcher.swift; sourceTree = "<group>"; };
+		A892272790C2A4BF3CE776AF /* BrandPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandPickerSheet.swift; sourceTree = "<group>"; };
 		B832CCF85C60E594B0F9FD67 /* FoldersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoldersView.swift; sourceTree = "<group>"; };
 		C2E009883A7973278D529460 /* GlassOTPWidgetExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = GlassOTPWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C2E48BB15F978C2031033C90 /* GlassOTPWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassOTPWidget.swift; sourceTree = "<group>"; };
@@ -76,6 +81,7 @@
 		C40D0314FC4881D1AC573F6E /* OTPCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPCardView.swift; sourceTree = "<group>"; };
 		E162C1B68F1B0706930909D6 /* OTPWidgetIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPWidgetIntents.swift; sourceTree = "<group>"; };
 		E6A2C7A2A67CD84D3A28B2DF /* GlassOTP.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GlassOTP.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F425EC8855D595BBC6353076 /* AutoCategorizeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoCategorizeSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -150,6 +156,7 @@
 			isa = PBXGroup;
 			children = (
 				7A2FBF4498DD3D22125408AC /* BiometricLockManager.swift */,
+				A2C7120C917145D21689E820 /* BrandLogoFetcher.swift */,
 				579D811F9A923199785B8048 /* VaultViewModel.swift */,
 			);
 			path = ViewModels;
@@ -171,7 +178,9 @@
 			children = (
 				9DDC569CABAA0C72912CE28E /* AccountEditorSheet.swift */,
 				149761E09AFDC6C4F600434F /* AccountQRDetailSheet.swift */,
+				F425EC8855D595BBC6353076 /* AutoCategorizeSheet.swift */,
 				5CF65E83347CE7090B421C2D /* BiometricLockOverlay.swift */,
+				A892272790C2A4BF3CE776AF /* BrandPickerSheet.swift */,
 				5BCA40793082F5FF0338C65B /* DesignSystem.swift */,
 				B832CCF85C60E594B0F9FD67 /* FoldersView.swift */,
 				283B9C8C4CDC67212DD2BF7B /* OTPAuthImportSheet.swift */,
@@ -288,8 +297,11 @@
 			files = (
 				E9E0C8448E8B78BD3CA45FA2 /* AccountEditorSheet.swift in Sources */,
 				BD4729DDAFC4CF9971CAF2A4 /* AccountQRDetailSheet.swift in Sources */,
+				A59511778699BD165C08A736 /* AutoCategorizeSheet.swift in Sources */,
 				A4F517900253B49E5E575A04 /* BiometricLockManager.swift in Sources */,
 				A04881A92B70B2878BA2B69B /* BiometricLockOverlay.swift in Sources */,
+				02A054D4DE3F50DD6C31776D /* BrandLogoFetcher.swift in Sources */,
+				84A2567558AB6B89521DC5B2 /* BrandPickerSheet.swift in Sources */,
 				00351B365E1744A66F71B2F3 /* DesignSystem.swift in Sources */,
 				72027D67D8CBD6D3030FF5D8 /* FoldersView.swift in Sources */,
 				F5F8C82244B91194F092CD61 /* GlassOTPApp.swift in Sources */,

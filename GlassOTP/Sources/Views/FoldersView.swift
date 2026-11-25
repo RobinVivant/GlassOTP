@@ -81,7 +81,15 @@ struct FoldersView: View {
         }
         .navigationTitle("Folders")
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    vault.showingAutoCategorizeSheet = true
+                } label: {
+                    Image(systemName: "wand.and.stars")
+                }
+                .disabled(vault.accounts.isEmpty)
+                .accessibilityLabel("Auto-Categorize Vault")
+
                 Button {
                     editingFolder = nil
                     folderName = ""

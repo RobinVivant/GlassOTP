@@ -45,6 +45,16 @@ struct VaultHomeView: View {
                     } label: {
                         Label("Add Account Manually", systemImage: "keyboard")
                     }
+
+                    if !vault.accounts.isEmpty {
+                        Divider()
+
+                        Button {
+                            vault.showingAutoCategorizeSheet = true
+                        } label: {
+                            Label("Auto-Categorize & Match Logos", systemImage: "wand.and.stars")
+                        }
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -147,6 +157,10 @@ struct VaultHomeView: View {
                         folderFilterBar
                     }
 
+                    if vault.shouldSuggestAutoCategorize {
+                        autoCategorizeBanner
+                    }
+
                     if vault.selectedFolderID == nil && !vault.pinnedAccounts.isEmpty {
                         pinnedSection(date: context.date)
                     }
@@ -156,6 +170,59 @@ struct VaultHomeView: View {
                 .padding(.vertical, 10)
             }
         }
+    }
+
+    private var autoCategorizeBanner: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "wand.and.stars")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 32, height: 32)
+                    .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+                Text("Organize & Match Logos")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+
+                Spacer()
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        vault.dismissedAutoCategorizeBanner = true
+                    }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss suggestion")
+            }
+
+            HStack(spacing: 12) {
+                Text("Sort into smart categories & fetch icons")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                Spacer(minLength: 4)
+
+                Button("Organize") {
+                    vault.showingAutoCategorizeSheet = true
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.glassProminent)
+            }
+        }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Color.accentColor.opacity(0.28), lineWidth: 1)
+        )
+        .padding(.horizontal, 16)
     }
 
     private var folderFilterBar: some View {

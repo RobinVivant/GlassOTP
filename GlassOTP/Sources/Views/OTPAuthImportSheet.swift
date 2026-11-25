@@ -266,6 +266,14 @@ struct OTPAuthImportSheet: View {
                         folders: decryptedFolders,
                         skipDuplicates: skipDuplicates
                     )
+                    if count > 0 && vault.shouldSuggestAutoCategorize {
+                        let plan = AccountCategorizer.buildPlan(accounts: vault.accounts, folders: vault.folders)
+                        let assignments = Dictionary(uniqueKeysWithValues: plan.items.map { ($0.id, $0.category) })
+                        vault.applyCategorization(assignments, removeEmptyDefaultFolder: true)
+                    }
+                    Task {
+                        _ = await vault.fetchMissingWebLogos()
+                    }
                     vault.alertMessage = count == 0
                         ? "All selected accounts were already in your vault."
                         : "Imported \(count) \(count == 1 ? "account" : "accounts") into GlassOTP."
@@ -299,7 +307,7 @@ struct OTPAuthImportSheet: View {
                                 .font(.title3)
                                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
 
-                            BrandAvatarView(style: account.brandStyle, size: 38)
+                            BrandAvatarView(account: account, size: 38, logoRevision: vault.logoCacheRevision)
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(account.displayTitle)

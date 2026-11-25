@@ -83,6 +83,8 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
     public var sortOrder: Int
     public var createdAt: Date
     public var updatedAt: Date
+    public var customBrandSlug: String?
+    public var customLogoDomain: String?
 
     public init(
         id: UUID = UUID(),
@@ -98,7 +100,9 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         isPinned: Bool = false,
         sortOrder: Int = 0,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        customBrandSlug: String? = nil,
+        customLogoDomain: String? = nil
     ) {
         self.id = id
         self.issuer = issuer.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -114,6 +118,8 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         self.sortOrder = sortOrder
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.customBrandSlug = customBrandSlug
+        self.customLogoDomain = customLogoDomain
     }
 
     public var displayTitle: String {
@@ -146,42 +152,13 @@ public struct OTPAccount: Identifiable, Codable, Hashable, Sendable {
         let key = displayTitle.lowercased()
         let monogram = Self.makeMonogram(from: displayTitle)
 
-        let knownBrands: [(matches: [String], accent: String, secondary: String, symbol: String)] = [
-            (["github"], "#6E5494", "#2B3137", "chevron.left.forwardslash.chevron.right"),
-            (["gitlab"], "#FC6D26", "#E24329", "flame.fill"),
-            (["google", "gmail", "youtube", "gcp"], "#4285F4", "#34A853", "g.circle.fill"),
-            (["apple", "icloud"], "#5E9EFF", "#1D4ED8", "apple.logo"),
-            (["aws", "amazon"], "#FF9900", "#D97706", "cloud.fill"),
-            (["cloudflare"], "#F38020", "#EA580C", "bolt.shield.fill"),
-            (["slack"], "#4A154B", "#E01E5A", "number"),
-            (["discord"], "#5865F2", "#404EED", "bubble.left.and.bubble.right.fill"),
-            (["stripe"], "#635BFF", "#0A2540", "creditcard.fill"),
-            (["microsoft", "azure", "outlook", "office"], "#00A4EF", "#0078D4", "square.grid.2x2.fill"),
-            (["dropbox"], "#0061FF", "#0047B3", "shippingbox.fill"),
-            (["facebook", "meta", "instagram"], "#1877F2", "#0C52B5", "person.2.fill"),
-            (["evernote"], "#00A82D", "#047857", "note.text"),
-            (["1password", "onepassword"], "#1A8CFF", "#0F4C81", "key.horizontal.fill"),
-            (["proton", "protonmail"], "#6D4AFF", "#4C1D95", "envelope.badge.shield.half.filled.fill"),
-            (["tailscale"], "#4F6BFF", "#1E293B", "network"),
-            (["digitalocean"], "#0080FF", "#0284C7", "drop.fill"),
-            (["vercel"], "#A855F7", "#18181B", "triangle.fill"),
-            (["linear"], "#5E6AD2", "#312E81", "checklist"),
-            (["figma"], "#A259FF", "#F24E1E", "paintbrush.fill"),
-            (["npm", "node"], "#CB3837", "#991B1B", "cube.box.fill"),
-            (["nas", "heim-nas", "synology", "truenas"], "#14B8A6", "#0F766E", "externaldrive.connected.to.line.below.fill"),
-            (["ssh", "linux", "server", "vps"], "#10B981", "#047857", "terminal.fill"),
-            (["bank", "chase", "revolut", "wise", "paypal"], "#0EA5E9", "#0369A1", "building.columns.fill"),
-        ]
-
-        for entry in knownBrands {
-            if entry.matches.contains(where: { key.contains($0) }) {
-                return OTPBrandStyle(
-                    accentHex: entry.accent,
-                    secondaryHex: entry.secondary,
-                    symbolName: entry.symbol,
-                    monogram: monogram
-                )
-            }
+        if let matched = BrandCatalog.shared.match(account: self) {
+            return OTPBrandStyle(
+                accentHex: "#\(matched.effectiveAccentHex)",
+                secondaryHex: "#\(matched.effectiveSecondaryHex)",
+                symbolName: matched.category.symbolName,
+                monogram: monogram
+            )
         }
 
         let palette: [(String, String, String)] = [

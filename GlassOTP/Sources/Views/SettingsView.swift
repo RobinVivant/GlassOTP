@@ -41,6 +41,27 @@ struct SettingsView: View {
             AmbientGlassBackground()
 
             Form {
+                Section("Logos & Categorization") {
+                    Button {
+                        vault.showingAutoCategorizeSheet = true
+                    } label: {
+                        Label("Auto-Categorize & Match Logos", systemImage: "wand.and.stars")
+                    }
+                    .disabled(vault.accounts.isEmpty)
+
+                    Button {
+                        Task {
+                            let fetched = await vault.fetchMissingWebLogos()
+                            vault.alertMessage = fetched == 0
+                                ? "All recognizable service logos are already loaded."
+                                : "Fetched \(fetched) additional service \(fetched == 1 ? "logo" : "logos")."
+                        }
+                    } label: {
+                        Label("Fetch Missing Web Logos", systemImage: "arrow.down.circle")
+                    }
+                    .disabled(vault.accounts.isEmpty)
+                }
+
                 Section("Migration & Backup") {
                     Button {
                         vault.showingImportSheet = true

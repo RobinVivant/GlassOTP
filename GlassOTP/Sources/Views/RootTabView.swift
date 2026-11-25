@@ -73,8 +73,14 @@ struct RootTabView: View {
         .sheet(isPresented: $bindableVault.showingNewAccountSheet) {
             AccountEditorSheet(account: nil, defaultFolderID: vault.selectedFolderID)
         }
+        .sheet(isPresented: $bindableVault.showingAutoCategorizeSheet) {
+            AutoCategorizeSheet()
+        }
         .sheet(item: $bindableVault.editingAccount) { account in
             AccountEditorSheet(account: account, defaultFolderID: account.folderID)
+        }
+        .sheet(item: $bindableVault.brandPickerAccount) { account in
+            BrandPickerSheet(account: account)
         }
         .sheet(item: $bindableVault.qrDetailAccount) { account in
             AccountQRDetailSheet(account: account)

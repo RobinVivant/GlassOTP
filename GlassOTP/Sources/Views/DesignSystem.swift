@@ -82,31 +82,115 @@ struct AmbientGlassBackground: View {
     }
 }
 
-struct BrandAvatarView: View {
-    let style: OTPBrandStyle
+struct BrandVectorShape: Shape {
+    let svgPath: String
+
+    func path(in rect: CGRect) -> Path {
+        guard let cgPath = SVGPathParser.parse(svgPath) else {
+            return Path()
+        }
+        let box = cgPath.boundingBoxOfPath
+        guard box.width > 0, box.height > 0 else { return Path() }
+
+        let referenceSpan = max(24.0, max(box.width, box.height))
+        let scale = min(rect.width, rect.height) / referenceSpan
+        let scaledWidth = box.width * scale
+        let scaledHeight = box.height * scale
+        let offsetX = rect.minX + (rect.width - scaledWidth) / 2.0 - box.minX * scale
+        let offsetY = rect.minY + (rect.height - scaledHeight) / 2.0 - box.minY * scale
+
+        var transform = CGAffineTransform(translationX: offsetX, y: offsetY)
+            .scaledBy(x: scale, y: scale)
+        guard let transformed = cgPath.copy(using: &transform) else {
+            return Path(cgPath)
+        }
+        return Path(transformed)
+    }
+}
+
+struct BrandBadgeContent: View {
+    let brand: BrandDefinition?
+    let fallbackStyle: OTPBrandStyle
+    let cachedDomain: String?
     var size: CGFloat = 44
+    var logoRevision: Int = 0
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: size * 0.30, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(hex: style.accentHex), Color(hex: style.secondaryHex)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: size * 0.30, style: .continuous)
-                        .strokeBorder(.white.opacity(0.28), lineWidth: 1)
-                )
+        let _ = logoRevision
+        let cornerRadius = size * 0.30
+        let cachedPNG: UIImage? = cachedDomain
+            .flatMap { BrandLogoCache.loadPNGData(forDomain: $0) }
+            .flatMap { UIImage(data: $0) }
 
-            Image(systemName: style.symbolName)
-                .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+        ZStack {
+            if let cachedPNG, brand?.svgPath == nil {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(Color.white.opacity(0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(.white.opacity(0.28), lineWidth: 1)
+                    )
+
+                Image(uiImage: cachedPNG)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size * 0.68, height: size * 0.68)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius * 0.6, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(hex: brand.map { "#\($0.effectiveAccentHex)" } ?? fallbackStyle.accentHex),
+                                Color(hex: brand.map { "#\($0.effectiveSecondaryHex)" } ?? fallbackStyle.secondaryHex),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(.white.opacity(0.28), lineWidth: 1)
+                    )
+
+                if let brand, let svgPath = brand.svgPath {
+                    let glyphColor: Color = brand.usesDarkGlyph ? Color(hex: "#111827") : .white
+                    BrandVectorShape(svgPath: svgPath)
+                        .fill(glyphColor)
+                        .frame(width: size * 0.56, height: size * 0.56)
+                        .shadow(color: .black.opacity(brand.usesDarkGlyph ? 0.08 : 0.18), radius: 2, y: 1)
+                } else {
+                    Image(systemName: fallbackStyle.symbolName)
+                        .font(.system(size: size * 0.42, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+                }
+            }
         }
         .frame(width: size, height: size)
+    }
+}
+
+struct BrandAvatarView: View {
+    let account: OTPAccount
+    var size: CGFloat = 44
+    var logoRevision: Int = 0
+
+    var body: some View {
+        let matched = BrandCatalog.shared.match(account: account)
+        let domain = BrandCatalog.shared.inferredDomain(for: account, includeHeuristicFallback: true)
+        BrandBadgeContent(
+            brand: matched,
+            fallbackStyle: account.brandStyle,
+            cachedDomain: domain,
+            size: size,
+            logoRevision: logoRevision
+        )
     }
 }
 
