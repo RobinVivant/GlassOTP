@@ -9,7 +9,7 @@ final class GlobalHotKeyManager {
     }
 
     private static let signature: OSType = 0x474F_5450 // 'GOTP'
-    private var eventHandlerRef: EventHandlerRef?
+    private nonisolated(unsafe) var eventHandlerRef: EventHandlerRef?
     private var registeredRefs: [UInt32: EventHotKeyRef] = [:]
     private var idToAction: [UInt32: Action] = [:]
 
@@ -21,19 +21,32 @@ final class GlobalHotKeyManager {
         installHandler()
     }
 
-    func register(quickPicker: HotKeyCombo?, accountHotKeys: [UUID: HotKeyCombo]) {
+    deinit {
+        if let eventHandlerRef {
+            RemoveEventHandler(eventHandlerRef)
+        }
+    }
+
+    @discardableResult
+    func register(quickPicker: HotKeyCombo?, accountHotKeys: [UUID: HotKeyCombo]) -> [HotKeyCombo] {
         unregisterAll()
+        var failedCombos: [HotKeyCombo] = []
 
         if let quickPicker {
-            registerHotKey(id: 1, combo: quickPicker, action: .quickPicker)
+            if !registerHotKey(id: 1, combo: quickPicker, action: .quickPicker) {
+                failedCombos.append(quickPicker)
+            }
         }
 
         let sortedAccounts = accountHotKeys.sorted { $0.key.uuidString < $1.key.uuidString }
         var nextID: UInt32 = 100
         for (accountID, combo) in sortedAccounts {
-            registerHotKey(id: nextID, combo: combo, action: .account(accountID))
+            if !registerHotKey(id: nextID, combo: combo, action: .account(accountID)) {
+                failedCombos.append(combo)
+            }
             nextID += 1
         }
+        return failedCombos
     }
 
     func unregisterAll() {
@@ -85,7 +98,8 @@ final class GlobalHotKeyManager {
         }
     }
 
-    private func registerHotKey(id: UInt32, combo: HotKeyCombo, action: Action) {
+    @discardableResult
+    private func registerHotKey(id: UInt32, combo: HotKeyCombo, action: Action) -> Bool {
         let hotKeyID = EventHotKeyID(signature: Self.signature, id: id)
         var hotKeyRef: EventHotKeyRef?
         let status = RegisterEventHotKey(
@@ -99,7 +113,9 @@ final class GlobalHotKeyManager {
         if status == noErr, let hotKeyRef {
             registeredRefs[id] = hotKeyRef
             idToAction[id] = action
+            return true
         }
+        return false
     }
 
     private func handleHotKey(id: UInt32) {

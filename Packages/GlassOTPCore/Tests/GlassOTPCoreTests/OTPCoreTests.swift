@@ -130,7 +130,7 @@ struct OTPCoreTests {
     @Test("GlassOTPBackupCodec encrypt/decrypt round-trip and wrong-password check")
     func glassOTPBackupRoundTrip() throws {
         let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
-        let folder = OTPFolder(name: "Engineering", symbolName: "server.rack", sortOrder: 0)
+        let folder = OTPFolder(name: "Engineering", symbolName: "server.rack", sortOrder: 0, updatedAt: fixedDate)
         let account = OTPAccount(
             issuer: "GitHub",
             label: "alex@example.com",
@@ -237,6 +237,177 @@ struct OTPCoreTests {
                 tag: sealed.tag,
                 key: wrongKey
             )
+        }
+    }
+
+    @Test("Snapshot merge preserves concurrent edits, tombstones deletions, and keeps max HOTP counter")
+    func snapshotMergeAndTombstones() {
+        let t1 = Date(timeIntervalSince1970: 1_700_000_000)
+        let t2 = Date(timeIntervalSince1970: 1_700_000_050)
+        let t3 = Date(timeIntervalSince1970: 1_700_000_100)
+
+        let devFolder = OTPFolder(name: "Dev", sortOrder: 0, updatedAt: t1)
+        let deletedFolder = OTPFolder(name: "Old", sortOrder: 1, updatedAt: t1)
+
+        let hotpID = UUID()
+        let toDeleteID = UUID()
+        let addedOnMacID = UUID()
+
+        let baseHotp = OTPAccount(id: hotpID, issuer: "NAS", label: "admin", secret: Data("123".utf8), type: .hotp, counter: 4, folderID: devFolder.id, createdAt: t1, updatedAt: t1)
+        let toDelete = OTPAccount(id: toDeleteID, issuer: "OldApp", label: "x", secret: Data("456".utf8), folderID: deletedFolder.id, createdAt: t1, updatedAt: t1)
+
+        // Device A incremented HOTP counter to 5 at t2, added Mac account, and deleted deletedFolder
+        var macHotp = baseHotp
+        macHotp.counter = 5
+        macHotp.updatedAt = t2
+        let macAdded = OTPAccount(id: addedOnMacID, issuer: "GitHub", label: "mac", secret: Data("789".utf8), createdAt: t2, updatedAt: t2)
+        let macSnapshot = OTPVaultSnapshot(
+            folders: [devFolder],
+            accounts: [macHotp, toDelete, macAdded],
+            updatedAt: t2,
+            folderTombstones: [OTPTombstone(id: deletedFolder.id, deletedAt: t2)]
+        )
+
+        // Device B pinned baseHotp later at t3 (with stale counter 4) and deleted toDelete at t3
+        var iosHotp = baseHotp
+        iosHotp.isPinned = true
+        iosHotp.updatedAt = t3
+        let iosSnapshot = OTPVaultSnapshot(
+            folders: [devFolder, deletedFolder],
+            accounts: [iosHotp],
+            updatedAt: t3,
+            accountTombstones: [OTPTombstone(id: toDeleteID, deletedAt: t3)]
+        )
+
+        let merged = macSnapshot.merged(with: iosSnapshot)
+        #expect(merged.folders.map(\.id) == [devFolder.id])
+        #expect(merged.accounts.contains(where: { $0.id == addedOnMacID }))
+        #expect(!merged.accounts.contains(where: { $0.id == toDeleteID }))
+
+        let mergedHotp = merged.accounts.first { $0.id == hotpID }
+        #expect(mergedHotp?.isPinned == true)
+        #expect(mergedHotp?.counter == 5)
+    }
+
+    @Test("VaultImportReconciler prevents colliding UUIDs and avoids orphan folders")
+    func importReconcilerSafety() {
+        let existingFolder = OTPFolder(name: "Cloud", sortOrder: 0)
+        let existingID = UUID()
+        let existingAccount = OTPAccount(
+            id: existingID,
+            issuer: "AWS",
+            label: "ops",
+            secret: Data("SECRET1".utf8),
+            folderID: existingFolder.id,
+            sortOrder: 0
+        )
+
+        let usedFolder = OTPFolder(name: "Cloud", sortOrder: 0)
+        let unusedFolder = OTPFolder(name: "Orphan", sortOrder: 1)
+        let selectedAccount = OTPAccount(
+            id: existingID, // intentionally collides with existingAccount ID!
+            issuer: "GitHub",
+            label: "dev",
+            secret: Data("SECRET2".utf8),
+            folderID: usedFolder.id
+        )
+        let unselectedAccount = OTPAccount(
+            issuer: "Other",
+            label: "user",
+            secret: Data("SECRET3".utf8),
+            folderID: unusedFolder.id
+        )
+
+        let plan = VaultImportReconciler.reconcile(
+            importedAccounts: [existingAccount, selectedAccount, unselectedAccount],
+            importedFolders: [usedFolder, unusedFolder],
+            existingAccounts: [existingAccount],
+            existingFolders: [existingFolder],
+            selectedIDs: [existingID, selectedAccount.id],
+            skipDuplicates: true
+        )
+
+        #expect(plan.addedCount == 1)
+        #expect(plan.skippedDuplicateCount == 1)
+        #expect(plan.accounts.count == 2)
+        #expect(Set(plan.accounts.map(\.id)).count == 2)
+        #expect(plan.folders.map(\.name) == ["Cloud"])
+        #expect(plan.accounts.last?.folderID == existingFolder.id)
+    }
+
+    @Test("10-digit OTP generation avoids 32-bit modulus overflow")
+    func tenDigitOTPNoOverflow() {
+        let secret = Data("12345678901234567890".utf8)
+        let code = OTPGenerator.generateHOTP(secret: secret, counter: 0, digits: 10, algorithm: .sha1)
+        #expect(code == "1284755224")
+    }
+
+    @Test("OTPUriParser rejects crafted migration varint overflow, double percent-decoding, and MD5")
+    func uriParserSecurityAndEdgeCases() throws {
+        // Malformed varint overflow length (2^63 - 1)
+        #expect(throws: OTPUriError.invalidMigrationPayload) {
+            try OTPUriParser.parse("otpauth-migration://offline?data=Cv%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwE%3D")
+        }
+
+        // Single percent-decode: %2520 in path stays literal %20
+        let singleDecoded = try OTPUriParser.parse(
+            "otpauth://totp/Issuer%3Auser%2520name?secret=JBSWY3DPEHPK3PXP&issuer=Issuer"
+        )
+        #expect(singleDecoded[0].label == "user%20name")
+
+        // MD5 rejection
+        #expect(throws: OTPUriError.unsupportedAlgorithm("MD5")) {
+            try OTPUriParser.parse("otpauth://totp/Legacy:user?secret=JBSWY3DPEHPK3PXP&algorithm=MD5")
+        }
+    }
+
+    @Test("GlassOTPBackupCodec decodes legacy GLOTP1, validates RNCryptor options, caps scrypt, and caps archive depth")
+    func codecCompatibilityAndLimits() throws {
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let snapshot = OTPVaultSnapshot(
+            folders: [OTPFolder(name: "Eng", sortOrder: 0, updatedAt: fixedDate)],
+            accounts: [OTPAccount(issuer: "GitHub", label: "a", secret: Data("s".utf8), createdAt: fixedDate, updatedAt: fixedDate)],
+            updatedAt: fixedDate
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let jsonData = try encoder.encode(snapshot)
+        var legacyGLOTP1 = Data("GLOTP1".utf8)
+        let rnEncrypted = try CryptoPrimitives.rncryptorV3Encrypt(plaintext: jsonData, password: "legacy-pass-1")
+        legacyGLOTP1.append(rnEncrypted)
+
+        let decodedLegacy = try GlassOTPBackupCodec.decode(data: legacyGLOTP1, password: "legacy-pass-1")
+        #expect(decodedLegacy.accounts.count == 1)
+
+        var badOptions = rnEncrypted
+        badOptions[1] = 0x00
+        #expect(throws: OTPImportError.self) {
+            try CryptoPrimitives.rncryptorV3Decrypt(data: badOptions, password: "legacy-pass-1")
+        }
+
+        #expect(throws: OTPImportError.self) {
+            try CryptoPrimitives.scrypt(password: Data("p".utf8), salt: Data("s".utf8), n: 1 << 20, r: 8, p: 1)
+        }
+
+        // Deeply nested NSKeyedArchiver plist > maxDepth (64)
+        var objects: [Any] = ["$null"]
+        let cfUidClass: [String: Any] = ["$classname": "NSArray", "$classes": ["NSArray", "NSObject"]]
+        objects.append(cfUidClass)
+        let uidType = { (i: Int) in ["CF$UID": i] }
+        for i in 2...80 {
+            objects.append(["$class": uidType(1), "NS.objects": [uidType(i + 1)]])
+        }
+        objects.append("leaf")
+        let plistObj: [String: Any] = [
+            "$version": 100_000,
+            "$archiver": "NSKeyedArchiver",
+            "$top": ["root": uidType(2)],
+            "$objects": objects,
+        ]
+        let xmlData = try PropertyListSerialization.data(fromPropertyList: plistObj, format: .xml, options: 0)
+        // Binary plist conversion preserves native plist structure; test KeyedArchiveParser via XML-transformed plist
+        #expect(throws: OTPImportError.self) {
+            try KeyedArchiveParser.parseRoot(from: xmlData)
         }
     }
 }

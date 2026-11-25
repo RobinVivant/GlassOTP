@@ -7,14 +7,17 @@ import UniformTypeIdentifiers
 struct MenuBarPopoverView: View {
     @Bindable var vault: MacVaultViewModel
     let onDismiss: (Bool) -> Void
+    let onPickImportURL: (NSOpenPanel) -> URL?
 
     @FocusState private var searchFocused: Bool
     @State private var recordingAccountID: UUID?
+    @State private var activeRecorderID: String?
     @State private var importError: String?
     @State private var pendingImportData: (url: URL, data: Data)?
     @State private var detectedEncryptedFormat: String?
     @State private var importPassword = ""
     @State private var showingPasswordPrompt = false
+    @State private var isReadingImport = false
 
     var body: some View {
         let displayed = vault.displayedAccounts
@@ -44,6 +47,12 @@ struct MenuBarPopoverView: View {
         }
         .onChange(of: vault.focusSearchToken) { _, _ in
             searchFocused = true
+        }
+        .onChange(of: vault.showingSettings) { _, isShowing in
+            if !isShowing {
+                activeRecorderID = nil
+                recordingAccountID = nil
+            }
         }
         .onExitCommand {
             if vault.showingSettings {
@@ -351,6 +360,8 @@ struct MenuBarPopoverView: View {
                         }
                         Spacer()
                         HotKeyRecorderButton(
+                            recorderID: "quickPicker",
+                            activeRecorderID: $activeRecorderID,
                             combo: Binding(
                                 get: { vault.quickPickerHotKey },
                                 set: { vault.quickPickerHotKey = $0 }
@@ -376,6 +387,7 @@ struct MenuBarPopoverView: View {
                                             vault.assignHotKey(slot, for: account.id)
                                         } else {
                                             recordingAccountID = account.id
+                                            activeRecorderID = account.id.uuidString
                                         }
                                     } label: {
                                         Label(
@@ -428,6 +440,8 @@ struct MenuBarPopoverView: View {
                                     Spacer()
 
                                     HotKeyRecorderButton(
+                                        recorderID: account.id.uuidString,
+                                        activeRecorderID: $activeRecorderID,
                                         combo: Binding(
                                             get: { vault.hotKey(for: account.id) },
                                             set: {
@@ -438,7 +452,11 @@ struct MenuBarPopoverView: View {
                                             }
                                         ),
                                         hotKeyManager: vault.hotKeyManager,
-                                        startRecording: recordingAccountID == account.id
+                                        onCancelRecording: {
+                                            if recordingAccountID == account.id {
+                                                recordingAccountID = nil
+                                            }
+                                        }
                                     )
                                 }
                                 .padding(.horizontal, 10)
@@ -593,26 +611,58 @@ struct MenuBarPopoverView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.message = "Select an export from OTP Auth (.otpauthdb/.otpauth), 2FAS (.2fas), Aegis/Bitwarden/Raivo/Stratum/andOTP/FreeOTP+/Proton (.json), Apple Passwords/Bitwarden/1Password (.csv), Ente Auth/URI (.txt), or .glassotp."
-        guard panel.runModal() == .OK, let url = panel.url, let data = try? Data(contentsOf: url) else {
+        guard let url = onPickImportURL(panel) else {
             return
         }
 
         let filename = url.lastPathComponent
-        switch VaultImporter.inspect(data: data, filenameHint: filename) {
-        case .plaintext:
-            vault.showingSettings = false
-            runBackupImport(data: data, password: nil, filename: filename)
-        case .encrypted(let hint):
-            detectedEncryptedFormat = hint
-            pendingImportData = (url, data)
-            importPassword = ""
-            importError = nil
-            vault.showingSettings = false
-            showingPasswordPrompt = true
-        case .unsupportedEncrypted(_, let guidance):
-            vault.alertMessage = guidance
-        case .unrecognized:
-            vault.alertMessage = OTPImportError.invalidFileFormat.errorDescription
+        isReadingImport = true
+        Task.detached(priority: .userInitiated) {
+            do {
+                let values = try url.resourceValues(forKeys: [.fileSizeKey])
+                if let fileSize = values.fileSize, fileSize > VaultImporter.maxImportFileBytes {
+                    await MainActor.run {
+                        isReadingImport = false
+                        vault.alertMessage = "Import files are limited to 20 MB."
+                    }
+                    return
+                }
+                let data = try Data(contentsOf: url)
+                guard data.count <= VaultImporter.maxImportFileBytes else {
+                    await MainActor.run {
+                        isReadingImport = false
+                        vault.alertMessage = "Import files are limited to 20 MB."
+                    }
+                    return
+                }
+                let inspection = VaultImporter.inspect(data: data, filenameHint: filename)
+                await MainActor.run {
+                    isReadingImport = false
+                    switch inspection {
+                    case .plaintext:
+                        vault.showingSettings = false
+                        runBackupImport(data: data, password: nil, filename: filename)
+                    case .encrypted(let hint):
+                        detectedEncryptedFormat = hint
+                        pendingImportData = (url, data)
+                        importPassword = ""
+                        importError = nil
+                        vault.showingSettings = false
+                        showingPasswordPrompt = true
+                    case .unsupportedEncrypted(_, let guidance):
+                        vault.alertMessage = guidance
+                    case .fileTooLarge(let msg):
+                        vault.alertMessage = msg
+                    case .unrecognized:
+                        vault.alertMessage = OTPImportError.invalidFileFormat.errorDescription
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isReadingImport = false
+                    vault.alertMessage = "Couldn't read \(filename): \(error.localizedDescription)"
+                }
+            }
         }
     }
 
@@ -834,18 +884,23 @@ private struct MacLiveRightCluster: View {
 }
 
 private struct HotKeyRecorderButton: View {
+    let recorderID: String
+    @Binding var activeRecorderID: String?
     @Binding var combo: HotKeyCombo?
     let hotKeyManager: GlobalHotKeyManager
-    var startRecording: Bool = false
+    var onCancelRecording: (() -> Void)? = nil
 
-    @State private var isRecording = false
     @State private var monitor: Any?
+
+    private var isRecording: Bool {
+        activeRecorderID == recorderID
+    }
 
     var body: some View {
         HStack(spacing: 4) {
             Button {
                 if isRecording {
-                    stopRecording()
+                    cancelRecording()
                 } else {
                     beginRecording()
                 }
@@ -874,31 +929,45 @@ private struct HotKeyRecorderButton: View {
             }
         }
         .onAppear {
-            if startRecording {
-                beginRecording()
+            if isRecording {
+                installMonitor()
+            }
+        }
+        .onChange(of: activeRecorderID) { _, newValue in
+            if newValue == recorderID {
+                installMonitor()
+            } else {
+                removeMonitor()
             }
         }
         .onDisappear {
-            stopRecording()
+            if isRecording {
+                cancelRecording()
+            } else {
+                removeMonitor()
+            }
         }
     }
 
     private func beginRecording() {
-        guard !isRecording else { return }
-        isRecording = true
-        hotKeyManager.isPaused = true
+        activeRecorderID = recorderID
+    }
 
+    private func installMonitor() {
+        guard monitor == nil else { return }
+        hotKeyManager.isPaused = true
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.keyCode == UInt16(kVK_Escape) {
                 DispatchQueue.main.async {
-                    stopRecording()
+                    cancelRecording()
                 }
                 return nil
             }
             if let captured = HotKeyCombo.from(event: event) {
                 DispatchQueue.main.async {
                     combo = captured
-                    stopRecording()
+                    activeRecorderID = nil
+                    removeMonitor()
                 }
                 return nil
             }
@@ -906,12 +975,19 @@ private struct HotKeyRecorderButton: View {
         }
     }
 
-    private func stopRecording() {
-        isRecording = false
-        hotKeyManager.isPaused = false
+    private func cancelRecording() {
+        activeRecorderID = nil
+        onCancelRecording?()
+        removeMonitor()
+    }
+
+    private func removeMonitor() {
         if let monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil
+        }
+        if activeRecorderID == nil {
+            hotKeyManager.isPaused = false
         }
     }
 }

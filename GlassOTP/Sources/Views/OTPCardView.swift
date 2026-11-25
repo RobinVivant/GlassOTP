@@ -55,6 +55,9 @@ struct PinnedOTPCardView: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(account.displayTitle) \(account.displaySubtitle)")
+        .accessibilityHint(isVisible ? "Double-tap to copy code" : "Double-tap to reveal or copy code")
     }
 }
 
@@ -62,6 +65,7 @@ struct OTPCardView: View {
     @Environment(VaultViewModel.self) private var vault
     let account: OTPAccount
     let folderName: String?
+    @State private var showingDeleteConfirmation = false
 
     var body: some View {
         let isVisible = vault.isCodeVisible(for: account.id)
@@ -180,10 +184,26 @@ struct OTPCardView: View {
             Divider()
 
             Button(role: .destructive) {
-                vault.deleteAccount(account)
+                showingDeleteConfirmation = true
             } label: {
                 Label("Delete", systemImage: "trash")
             }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("\(account.displayTitle)\(account.displaySubtitle.isEmpty ? "" : ", \(account.displaySubtitle)")")
+        .accessibilityHint(isVisible ? "Tap to copy verification code" : "Tap to reveal verification code")
+        .confirmationDialog(
+            "Delete \(account.displayTitle)?",
+            isPresented: $showingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Account", role: .destructive) {
+                vault.deleteAccount(account)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the 2FA secret key for \(account.displayTitle) from your vault. Make sure you still have recovery access before deleting.")
         }
     }
 }

@@ -76,7 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let pinnedID = vault.menuBarAccountID,
            let account = vault.accounts.first(where: { $0.id == pinnedID }) {
             let snapshot = OTPGenerator.snapshot(for: account, at: vault.clock.now, includeNextCode: false)
-            button.title = " \(snapshot.formattedCode)"
+            if account.type == .totp {
+                let remaining = max(0, Int(ceil(snapshot.remainingSeconds)))
+                button.title = " \(snapshot.formattedCode) • \(remaining)s"
+            } else {
+                button.title = " \(snapshot.formattedCode)"
+            }
             button.toolTip = "\(account.displayTitle) • GlassOTP"
         } else {
             button.title = ""

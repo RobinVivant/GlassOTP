@@ -333,13 +333,15 @@ struct BrandAvatarView: View, Equatable {
 
     var body: some View {
         let matched = BrandCatalog.shared.match(account: account)
-        let needsFallback = matched?.svgPath == nil
-        let domain = needsFallback
-            ? BrandCatalog.shared.inferredDomain(for: account, includeHeuristicFallback: true)
-            : nil
+        let customDomain = BrandCatalog.cleanedDomain(account.customLogoDomain)
+        let resolvedBrand = customDomain != nil ? nil : matched
+        let needsFallback = customDomain != nil || matched?.svgPath == nil
+        let domain = customDomain ?? (needsFallback
+            ? BrandCatalog.shared.inferredDomain(for: account, includeHeuristicFallback: false)
+            : nil)
 
         BrandBadgeContent(
-            brand: matched,
+            brand: resolvedBrand,
             fallbackStyle: needsFallback ? account.brandStyle : nil,
             cachedDomain: domain,
             size: size,

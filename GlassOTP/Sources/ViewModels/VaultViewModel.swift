@@ -51,11 +51,8 @@ final class VaultViewModel {
         }
     }
 
-    var iCloudSyncEnabled: Bool {
-        didSet {
-            store.setICloudSyncEnabled(iCloudSyncEnabled)
-        }
-    }
+    private(set) var iCloudSyncEnabled: Bool
+    private(set) var hasLoadError = false
 
     var hideCodesInApp: Bool {
         didSet {
@@ -75,6 +72,9 @@ final class VaultViewModel {
     private let store: KeychainVaultStore
     private var toastDismissTask: Task<Void, Never>?
     @ObservationIgnored private var pendingForegroundCopyCode: String?
+    @ObservationIgnored private var pendingIncomingURL: URL?
+    @ObservationIgnored private var accountTombstones: [OTPTombstone] = []
+    @ObservationIgnored private var folderTombstones: [OTPTombstone] = []
     private static let hideCodesKey = "glassotp.hideCodesInApp"
     private static let dismissBannerKey = "glassotp.dismissAutoCategorizeBanner"
 
@@ -88,7 +88,12 @@ final class VaultViewModel {
     }
 
     private func rebuildFolderLookup() {
-        folderNamesByID = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0.name) })
+        var map: [UUID: String] = [:]
+        map.reserveCapacity(folders.count)
+        for folder in folders {
+            map[folder.id] = folder.name
+        }
+        folderNamesByID = map
     }
 
     private func rebuildPinnedAccounts() {
@@ -131,27 +136,72 @@ final class VaultViewModel {
 
     func reloadFromStore() {
         do {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
             if let snapshot = try store.loadSnapshot() {
                 folders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
                 accounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
+                accountTombstones = snapshot.accountTombstones
+                folderTombstones = snapshot.folderTombstones
+                if let selectedFolderID, !folders.contains(where: { $0.id == selectedFolderID }) {
+                    self.selectedFolderID = nil
+                }
+            } else {
+                folders = []
+                accounts = []
+                accountTombstones = []
+                folderTombstones = []
+                selectedFolderID = nil
             }
+            hasLoadError = false
         } catch {
+            hasLoadError = true
             alertMessage = error.localizedDescription
         }
     }
 
-    func persist() {
+    func updateICloudSync(enabled: Bool, removeFromICloud: Bool = true) {
+        do {
+            let migrated = try store.setICloudSyncEnabled(enabled, removeOppositeBucket: removeFromICloud)
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            if let migrated {
+                folders = migrated.folders.sorted { $0.sortOrder < $1.sortOrder }
+                accounts = migrated.accounts.sorted { $0.sortOrder < $1.sortOrder }
+                accountTombstones = migrated.accountTombstones
+                folderTombstones = migrated.folderTombstones
+            }
+            hasLoadError = false
+            WidgetCenter.shared.reloadAllTimelines()
+        } catch {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func persist() -> Bool {
+        guard !hasLoadError else {
+            alertMessage = "Cannot save changes because the existing Keychain vault could not be loaded."
+            return false
+        }
         let snapshot = OTPVaultSnapshot(
             schemaVersion: 1,
             folders: folders,
             accounts: accounts,
-            updatedAt: Date()
+            updatedAt: Date(),
+            accountTombstones: accountTombstones,
+            folderTombstones: folderTombstones
         )
         do {
-            try store.saveSnapshot(snapshot)
+            let merged = try store.saveMergedSnapshot(snapshot)
+            folders = merged.folders.sorted { $0.sortOrder < $1.sortOrder }
+            accounts = merged.accounts.sorted { $0.sortOrder < $1.sortOrder }
+            accountTombstones = merged.accountTombstones
+            folderTombstones = merged.folderTombstones
             WidgetCenter.shared.reloadAllTimelines()
+            return true
         } catch {
             alertMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -218,7 +268,10 @@ final class VaultViewModel {
         persist()
     }
 
-    func upsertAccount(_ account: OTPAccount) {
+    @discardableResult
+    func upsertAccount(_ account: OTPAccount) -> Bool {
+        let prevFolders = folders
+        let prevAccounts = accounts
         if let index = accounts.firstIndex(where: { $0.id == account.id }) {
             var updated = account
             updated.updatedAt = Date()
@@ -228,13 +281,26 @@ final class VaultViewModel {
             created.sortOrder = accounts.count
             accounts.append(created)
         }
-        persist()
+        guard persist() else {
+            folders = prevFolders
+            accounts = prevAccounts
+            return false
+        }
+        return true
     }
 
     func deleteAccount(_ account: OTPAccount) {
+        let prevAccounts = accounts
+        let prevTombstones = accountTombstones
+        let prevRevealed = revealedAccountIDs
+        accountTombstones.append(OTPTombstone(id: account.id, deletedAt: Date()))
         accounts.removeAll { $0.id == account.id }
         revealedAccountIDs.remove(account.id)
-        persist()
+        if !persist() {
+            accounts = prevAccounts
+            accountTombstones = prevTombstones
+            revealedAccountIDs = prevRevealed
+        }
     }
 
     func updateBrandOverride(for account: OTPAccount, brandSlug: String?, customDomain: String?) {
@@ -253,6 +319,11 @@ final class VaultViewModel {
             existingFolders: folders,
             removeEmptyDefaultFolder: removeEmptyDefaultFolder
         )
+        let keptFolderIDs = Set(result.folders.map(\.id))
+        let now = Date()
+        for folder in folders where !keptFolderIDs.contains(folder.id) {
+            folderTombstones.append(OTPTombstone(id: folder.id, deletedAt: now))
+        }
         folders = result.folders
         accounts = result.accounts
         if let selected = selectedFolderID, !folders.contains(where: { $0.id == selected }) {
@@ -263,8 +334,8 @@ final class VaultViewModel {
     }
 
     @discardableResult
-    func fetchMissingWebLogos() async -> Int {
-        let fetched = await BrandLogoFetcher.fetchMissingLogos(for: accounts)
+    func fetchMissingWebLogos(for targetAccounts: [OTPAccount]? = nil) async -> Int {
+        let fetched = await BrandLogoFetcher.fetchMissingLogos(for: targetAccounts ?? accounts)
         if fetched > 0 {
             bumpLogoRevision()
             WidgetCenter.shared.reloadAllTimelines()
@@ -280,6 +351,7 @@ final class VaultViewModel {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if folders.contains(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            alertMessage = "A folder named \"\(trimmed)\" already exists."
             return
         }
         let folder = OTPFolder(name: trimmed, symbolName: symbolName, sortOrder: folders.count)
@@ -291,24 +363,50 @@ final class VaultViewModel {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let index = folders.firstIndex(where: { $0.id == folder.id }) else { return }
+        if folders.contains(where: {
+            $0.id != folder.id && $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            alertMessage = "A folder named \"\(trimmed)\" already exists."
+            return
+        }
         folders[index].name = trimmed
         folders[index].symbolName = symbolName
+        folders[index].updatedAt = Date()
         persist()
     }
 
     func deleteFolder(_ folder: OTPFolder) {
+        let prevFolders = folders
+        let prevAccounts = accounts
+        let prevTombstones = folderTombstones
+        let prevSelected = selectedFolderID
+
+        let now = Date()
+        folderTombstones.append(OTPTombstone(id: folder.id, deletedAt: now))
         folders.removeAll { $0.id == folder.id }
         for idx in accounts.indices where accounts[idx].folderID == folder.id {
             accounts[idx].folderID = nil
+            accounts[idx].updatedAt = now
         }
         if selectedFolderID == folder.id {
             selectedFolderID = nil
         }
-        persist()
+        if !persist() {
+            folders = prevFolders
+            accounts = prevAccounts
+            folderTombstones = prevTombstones
+            selectedFolderID = prevSelected
+        }
     }
 
     func existingFingerprints() -> Set<String> {
         Set(accounts.map(\.fingerprint))
+    }
+
+    struct ImportSummary {
+        let addedCount: Int
+        let skippedDuplicates: Int
+        let saved: Bool
     }
 
     @discardableResult
@@ -316,41 +414,43 @@ final class VaultViewModel {
         _ incomingAccounts: [OTPAccount],
         folders incomingFolders: [OTPFolder],
         skipDuplicates: Bool
-    ) -> Int {
-        var folderMap: [UUID: UUID] = [:]
-        for incomingFolder in incomingFolders {
-            if let existing = folders.first(where: {
-                $0.name.caseInsensitiveCompare(incomingFolder.name) == .orderedSame
-            }) {
-                folderMap[incomingFolder.id] = existing.id
-            } else {
-                var newFolder = incomingFolder
-                newFolder.sortOrder = folders.count
-                folders.append(newFolder)
-                folderMap[incomingFolder.id] = newFolder.id
-            }
+    ) -> ImportSummary {
+        let plan = VaultImportReconciler.reconcile(
+            importedAccounts: incomingAccounts,
+            importedFolders: incomingFolders,
+            existingAccounts: accounts,
+            existingFolders: folders,
+            skipDuplicates: skipDuplicates
+        )
+
+        guard plan.addedCount > 0 else {
+            return ImportSummary(addedCount: 0, skippedDuplicates: plan.skippedDuplicateCount, saved: true)
         }
 
-        var seenFingerprints = existingFingerprints()
-        var importedCount = 0
-
-        for var account in incomingAccounts {
-            if skipDuplicates && seenFingerprints.contains(account.fingerprint) {
-                continue
-            }
-            if let oldFolderID = account.folderID, let mappedFolderID = folderMap[oldFolderID] {
-                account.folderID = mappedFolderID
-            }
-            account.sortOrder = accounts.count
-            accounts.append(account)
-            seenFingerprints.insert(account.fingerprint)
-            importedCount += 1
+        let prevFolders = folders
+        let prevAccounts = accounts
+        folders = plan.folders
+        accounts = plan.accounts
+        let saved = persist()
+        if !saved {
+            folders = prevFolders
+            accounts = prevAccounts
         }
+        return ImportSummary(addedCount: saved ? plan.addedCount : 0, skippedDuplicates: plan.skippedDuplicateCount, saved: saved)
+    }
 
-        if importedCount > 0 || !incomingFolders.isEmpty {
-            persist()
-        }
-        return importedCount
+    func dismissSensitivePresentationsForLock() {
+        revealedAccountIDs.removeAll()
+        pendingForegroundCopyCode = nil
+        toastDismissTask?.cancel()
+        copiedToast = nil
+        qrDetailAccount = nil
+        editingAccount = nil
+        brandPickerAccount = nil
+        showingScannerSheet = false
+        showingNewAccountSheet = false
+        showingImportSheet = false
+        showingAutoCategorizeSheet = false
     }
 
     func makeBackupSnapshot() -> OTPVaultSnapshot {
@@ -362,14 +462,34 @@ final class VaultViewModel {
         )
     }
 
-    func handleIncomingURL(_ url: URL) {
+    func processPendingIncomingURLIfUnlocked(isLocked: Bool) {
+        guard !isLocked, let url = pendingIncomingURL else { return }
+        pendingIncomingURL = nil
+        handleIncomingURL(url, isLocked: false)
+    }
+
+    func handleIncomingURL(_ url: URL, isLocked: Bool = false) {
+        if isLocked {
+            pendingIncomingURL = url
+            return
+        }
+
         if url.isFileURL {
             let scoped = url.startAccessingSecurityScopedResource()
             defer {
                 if scoped { url.stopAccessingSecurityScopedResource() }
             }
             do {
+                let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey])
+                if let fileSize = resourceValues.fileSize, fileSize > VaultImporter.maxImportFileBytes {
+                    alertMessage = "Import files are limited to 20 MB."
+                    return
+                }
                 let data = try Data(contentsOf: url)
+                guard data.count <= VaultImporter.maxImportFileBytes else {
+                    alertMessage = "Import files are limited to 20 MB."
+                    return
+                }
                 pendingImportFile = PendingImportFile(filename: url.lastPathComponent, data: data)
                 showingImportSheet = true
             } catch {
@@ -397,9 +517,7 @@ final class VaultViewModel {
            url.host?.lowercased() == "account",
            let idString = url.pathComponents.dropFirst().first,
            let accountID = UUID(uuidString: idString) {
-            if accounts.first(where: { $0.id == accountID }) == nil {
-                reloadFromStore()
-            }
+            reloadFromStore()
             if let match = accounts.first(where: { $0.id == accountID }) {
                 if let folderID = match.folderID {
                     selectedFolderID = folderID
@@ -407,6 +525,9 @@ final class VaultViewModel {
                     selectedFolderID = nil
                 }
                 copyCode(for: match, reloadWidgets: true)
+                if match.type == .hotp {
+                    incrementHOTP(for: match)
+                }
             }
         }
     }

@@ -63,8 +63,8 @@ struct RootTabView: View {
                 if parsedAccounts.count == 1, let single = parsedAccounts.first {
                     vault.editingAccount = single
                 } else if !parsedAccounts.isEmpty {
-                    let count = vault.importAccounts(parsedAccounts, folders: [], skipDuplicates: true)
-                    if count == 0 {
+                    let summary = vault.importAccounts(parsedAccounts, folders: [], skipDuplicates: true)
+                    if summary.saved && summary.addedCount == 0 {
                         vault.alertMessage = "All scanned accounts are already in your vault."
                     }
                 }
@@ -102,7 +102,10 @@ struct RootTabView: View {
         ) {
             Button("Import All") {
                 if let incoming = vault.pendingURIAccounts {
-                    vault.importAccounts(incoming, folders: [], skipDuplicates: true)
+                    let summary = vault.importAccounts(incoming, folders: [], skipDuplicates: true)
+                    if summary.saved && summary.addedCount == 0 {
+                        vault.alertMessage = "All scanned accounts are already in your vault."
+                    }
                     vault.pendingURIAccounts = nil
                 }
             }

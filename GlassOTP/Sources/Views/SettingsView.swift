@@ -32,6 +32,21 @@ struct SettingsView: View {
     @State private var exportDocument: GlassOTPBackupDocument?
     @State private var showingFileExporter = false
     @State private var showingWidgetGuide = false
+    @State private var showingICloudDisableConfirmation = false
+    @State private var isExportingBackup = false
+
+    private var iCloudSyncBinding: Binding<Bool> {
+        Binding(
+            get: { vault.iCloudSyncEnabled },
+            set: { newValue in
+                if newValue {
+                    vault.updateICloudSync(enabled: true, removeFromICloud: true)
+                } else {
+                    showingICloudDisableConfirmation = true
+                }
+            }
+        )
+    }
 
     var body: some View {
         @Bindable var bindableVault = vault
@@ -80,7 +95,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Toggle("iCloud Keychain Sync", isOn: $bindableVault.iCloudSyncEnabled)
+                    Toggle("iCloud Keychain Sync", isOn: iCloudSyncBinding)
                 } header: {
                     Text("Sync & Storage")
                 } footer: {
@@ -118,22 +133,37 @@ struct SettingsView: View {
                 Section("About") {
                     LabeledContent("Vault Accounts", value: "\(vault.accounts.count)")
                     LabeledContent("Folders", value: "\(vault.folders.count)")
-                    LabeledContent("Format", value: "RFC 4226 / 6238 + RNCryptor v3")
+                    LabeledContent("Format", value: "RFC 4226 / 6238 • scrypt + AES-256-GCM")
                 }
             }
             .scrollContentBackground(.hidden)
         }
         .navigationTitle("Settings")
+        .confirmationDialog(
+            "Turn Off iCloud Keychain Sync?",
+            isPresented: $showingICloudDisableConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Turn Off & Delete iCloud Copy", role: .destructive) {
+                vault.updateICloudSync(enabled: false, removeFromICloud: true)
+            }
+            Button("Use Local-Only & Keep iCloud Copy") {
+                vault.updateICloudSync(enabled: false, removeFromICloud: false)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Deleting the iCloud copy removes it from all devices signed into your Apple Account. Or keep the existing iCloud vault and switch only this device to local storage.")
+        }
         .sheet(isPresented: $showingExportPasswordPrompt) {
             NavigationStack {
                 Form {
                     Section {
-                        SecureField("Backup Password", text: $exportPassword)
+                        SecureField("Backup Password (min 8 chars)", text: $exportPassword)
                         SecureField("Confirm Password", text: $exportConfirmPassword)
                     } header: {
-                        Text("AES-256 + RNCryptor v3")
+                        Text("AES-256-GCM + scrypt (GLOTP2)")
                     } footer: {
-                        Text("Choose a strong password. GlassOTP cannot recover lost backup passwords.")
+                        Text("Use at least 8 characters. GlassOTP cannot recover lost backup passwords.")
                     }
                 }
                 .navigationTitle("Encrypt Vault Backup")
@@ -143,20 +173,32 @@ struct SettingsView: View {
                         Button("Cancel") { showingExportPasswordPrompt = false }
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Export") {
-                            do {
-                                let encoded = try GlassOTPBackupCodec.encode(
-                                    snapshot: vault.makeBackupSnapshot(),
-                                    password: exportPassword
-                                )
-                                exportDocument = GlassOTPBackupDocument(data: encoded)
-                                showingExportPasswordPrompt = false
-                                showingFileExporter = true
-                            } catch {
-                                vault.alertMessage = error.localizedDescription
+                        Button {
+                            let snapshot = vault.makeBackupSnapshot()
+                            let pwd = exportPassword
+                            isExportingBackup = true
+                            Task {
+                                do {
+                                    let encoded = try await Task.detached(priority: .userInitiated) {
+                                        try GlassOTPBackupCodec.encode(snapshot: snapshot, password: pwd)
+                                    }.value
+                                    isExportingBackup = false
+                                    exportDocument = GlassOTPBackupDocument(data: encoded)
+                                    showingExportPasswordPrompt = false
+                                    showingFileExporter = true
+                                } catch {
+                                    isExportingBackup = false
+                                    vault.alertMessage = error.localizedDescription
+                                }
+                            }
+                        } label: {
+                            if isExportingBackup {
+                                ProgressView()
+                            } else {
+                                Text("Export")
                             }
                         }
-                        .disabled(exportPassword.isEmpty || exportPassword != exportConfirmPassword)
+                        .disabled(isExportingBackup || exportPassword.count < 8 || exportPassword != exportConfirmPassword)
                     }
                 }
             }
@@ -179,7 +221,7 @@ struct SettingsView: View {
                         guideStep(
                             number: "1",
                             title: "Pin Favorite Accounts",
-                            body: "Long-press or swipe right on any account in the Vault tab and tap Pin. Widgets prioritize pinned accounts automatically."
+                            body: "Long-press any account in the Vault tab and tap Pin to Top & Widgets. Widgets prioritize pinned accounts automatically."
                         )
                         guideStep(
                             number: "2",

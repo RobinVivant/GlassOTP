@@ -8,11 +8,14 @@ final class CopyHUDController {
 
     private var panel: NSPanel?
     private var dismissTask: Task<Void, Never>?
+    private var presentationToken = UUID()
 
     private init() {}
 
     func show(account: OTPAccount, formattedCode: String, remainingSeconds: Int?, didAutoType: Bool) {
         dismissTask?.cancel()
+        let token = UUID()
+        presentationToken = token
 
         let hudView = CopyHUDCardView(
             account: account,
@@ -49,14 +52,20 @@ final class CopyHUDController {
 
         dismissTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1.8))
-            guard !Task.isCancelled, let self, let panel = self.panel else { return }
+            guard !Task.isCancelled,
+                  let self,
+                  self.presentationToken == token,
+                  let panel = self.panel else {
+                return
+            }
             NSAnimationContext.runAnimationGroup(
                 { context in
                     context.duration = 0.22
                     panel.animator().alphaValue = 0
                 },
-                completionHandler: { [weak panel] in
+                completionHandler: { [weak self, weak panel] in
                     Task { @MainActor in
+                        guard let self, self.presentationToken == token else { return }
                         panel?.orderOut(nil)
                     }
                 }

@@ -13,6 +13,7 @@ struct OTPWidgetItem: Identifiable, Sendable {
     let brandSlug: String?
     let usesDarkGlyph: Bool
     let cachedLogoDomain: String?
+    let hasCustomLogoDomain: Bool
     let isHOTP: Bool
     let formattedCode: String
     let periodStart: Date
@@ -47,6 +48,7 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                     brandSlug: "github",
                     usesDarkGlyph: false,
                     cachedLogoDomain: "github.com",
+                    hasCustomLogoDomain: false,
                     isHOTP: false,
                     formattedCode: "482 917",
                     periodStart: now,
@@ -64,6 +66,7 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                     brandSlug: "cloudflare",
                     usesDarkGlyph: false,
                     cachedLogoDomain: "cloudflare.com",
+                    hasCustomLogoDomain: false,
                     isHOTP: false,
                     formattedCode: "910 342",
                     periodStart: now,
@@ -95,25 +98,35 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
             return Timeline(entries: [emptyEntry], policy: .after(now.addingTimeInterval(300)))
         }
 
-        // Generate 120 entries at exact 30-second boundaries (~60 minutes ahead)
         var boundaryDates: [Date] = [now]
-        let step: TimeInterval = 30
-        let baseBoundary = floor(now.timeIntervalSince1970 / step) * step
-        for idx in 1...120 {
-            boundaryDates.append(Date(timeIntervalSince1970: baseBoundary + TimeInterval(idx) * step))
+        let horizonEnd = now.addingTimeInterval(3600)
+        let activeAccounts = Array(accounts.prefix(4))
+        let periods = Set(activeAccounts.compactMap { $0.type == .totp ? max(1, $0.period) : nil })
+        let targetPeriods = periods.isEmpty ? [30] : Array(periods).sorted()
+
+        for period in targetPeriods {
+            let step = TimeInterval(period)
+            let baseBoundary = floor(now.timeIntervalSince1970 / step) * step
+            var t = baseBoundary + step
+            while t <= horizonEnd.timeIntervalSince1970 && boundaryDates.count < 240 {
+                boundaryDates.append(Date(timeIntervalSince1970: t))
+                t += step
+            }
         }
 
-        // Insert exact reveal expiry timestamps so masked widgets auto-hide on schedule
-        if configuration.requireTapToReveal {
-            for account in accounts.prefix(4) {
-                if let expiry = SharedWidgetStateStore.revealExpiry(accountID: account.id, now: now) {
-                    boundaryDates.append(expiry)
-                }
+        // Insert exact reveal & copied-badge expiry timestamps so widgets update promptly
+        for account in activeAccounts {
+            if configuration.requireTapToReveal,
+               let expiry = SharedWidgetStateStore.revealExpiry(accountID: account.id, now: now) {
+                boundaryDates.append(expiry)
+            }
+            if let copyExpiry = SharedWidgetStateStore.copyExpiry(accountID: account.id, now: now) {
+                boundaryDates.append(copyExpiry)
             }
         }
 
         let uniqueSortedDates = Array(Set(boundaryDates)).sorted()
-        let entries = uniqueSortedDates.map { date in
+        let entries = uniqueSortedDates.prefix(160).map { date in
             makeEntry(
                 at: date,
                 accounts: accounts,
@@ -157,12 +170,13 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
         universalClipboardEnabled: Bool
     ) -> OTPWidgetEntry {
         let items = accounts.prefix(4).map { account in
-            let codeSnapshot = OTPGenerator.snapshot(for: account, at: date)
+            let codeSnapshot = OTPGenerator.snapshot(for: account, at: date, includeNextCode: false)
             let isRevealed = !requireTapToReveal || SharedWidgetStateStore.isRevealed(accountID: account.id, now: date)
             let wasCopied = SharedWidgetStateStore.wasRecentlyCopied(accountID: account.id, now: date)
             let brand = account.brandStyle
             let matchedBrand = BrandCatalog.shared.match(account: account)
-            let cachedDomain = BrandCatalog.shared.inferredDomain(for: account, includeHeuristicFallback: true)
+            let customDomain = BrandCatalog.cleanedDomain(account.customLogoDomain)
+            let cachedDomain = customDomain ?? BrandCatalog.shared.inferredDomain(for: account, includeHeuristicFallback: false)
 
             return OTPWidgetItem(
                 id: account.id,
@@ -174,6 +188,7 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                 brandSlug: matchedBrand?.slug,
                 usesDarkGlyph: matchedBrand?.usesDarkGlyph ?? false,
                 cachedLogoDomain: cachedDomain,
+                hasCustomLogoDomain: customDomain != nil,
                 isHOTP: account.type == .hotp,
                 formattedCode: codeSnapshot.formattedCode,
                 periodStart: codeSnapshot.periodStart,
@@ -359,6 +374,7 @@ struct GlassOTPWidgetEntryView: View {
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
+                        .privacySensitive()
                         .widgetAccentable()
                     Spacer(minLength: 2)
                     Image(systemName: lockScreenActionSymbol(for: item))
@@ -379,19 +395,25 @@ struct GlassOTPWidgetEntryView: View {
                         .font(.title3.weight(.bold))
                         .widgetAccentable()
                 } else if !item.isHOTP {
-                    Gauge(value: 0.5, in: 0...1) {
-                        Text(item.title.prefix(2))
+                    ProgressView(timerInterval: item.periodStart...item.periodEnd, countsDown: true) {
+                        EmptyView()
                     } currentValueLabel: {
-                        Text(item.isMasked ? "•••" : String(item.formattedCode.prefix(3)))
-                            .font(.caption.bold())
+                        Text(item.isMasked ? "•••" : item.formattedCode)
+                            .font(.caption2.bold())
                             .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.45)
+                            .privacySensitive()
                     }
-                    .gaugeStyle(.accessoryCircularCapacity)
+                    .progressViewStyle(.circular)
                     .widgetAccentable()
                 } else {
-                    Text(item.isMasked ? "•••" : String(item.formattedCode.prefix(3)))
-                        .font(.caption.bold())
+                    Text(item.isMasked ? "•••" : item.formattedCode)
+                        .font(.caption2.bold())
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.45)
+                        .privacySensitive()
                         .widgetAccentable()
                 }
             }
@@ -402,6 +424,7 @@ struct GlassOTPWidgetEntryView: View {
     private func accessoryInlineView(item: OTPWidgetItem) -> some View {
         Text("\(item.title): \(item.isMasked ? "••• •••" : item.formattedCode)")
             .monospacedDigit()
+            .privacySensitive()
             .widgetURL(URL(string: "glassotp://account/\(item.id.uuidString)"))
     }
 
@@ -449,6 +472,7 @@ struct GlassOTPWidgetEntryView: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
+                .privacySensitive()
                 .widgetAccentable()
         }
     }
@@ -558,7 +582,7 @@ private struct WidgetBrandBadge: View {
     let size: CGFloat
 
     var body: some View {
-        let matchedBrand = item.brandSlug.flatMap { BrandCatalog.shared.brand(slug: $0) }
+        let matchedBrand = item.hasCustomLogoDomain ? nil : item.brandSlug.flatMap { BrandCatalog.shared.brand(slug: $0) }
         let cachedPNG: UIImage? = matchedBrand?.svgPath == nil
             ? item.cachedLogoDomain
                 .flatMap { BrandLogoCache.loadPNGData(forDomain: $0) }

@@ -13,6 +13,8 @@ struct QRScannerSheet: View {
     @State private var errorMessage: String?
     @State private var torchOn = false
     @State private var hasCamera = AVCaptureDevice.default(for: .video) != nil
+    @State private var cameraAuthStatus = AVCaptureDevice.authorizationStatus(for: .video)
+    @State private var scannerResetToken = UUID()
 
     var body: some View {
         NavigationStack {
@@ -20,10 +22,12 @@ struct QRScannerSheet: View {
                 AmbientGlassBackground()
 
                 VStack(spacing: 18) {
-                    if hasCamera {
-                        cameraViewfinder
-                    } else {
+                    if !hasCamera {
                         noCameraFallback
+                    } else if cameraAuthStatus == .denied || cameraAuthStatus == .restricted {
+                        cameraPermissionDeniedView
+                    } else {
+                        cameraViewfinder
                     }
 
                     if let errorMessage {
@@ -87,7 +91,7 @@ struct QRScannerSheet: View {
 
     private var cameraViewfinder: some View {
         ZStack {
-            QRCameraPreview(torchOn: torchOn) { code in
+            QRCameraPreview(torchOn: torchOn, resetToken: scannerResetToken) { code in
                 handleScannedString(code)
             }
             .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
@@ -108,6 +112,32 @@ struct QRScannerSheet: View {
             }
         }
         .frame(maxHeight: 440)
+    }
+
+    private var cameraPermissionDeniedView: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "camera.fill")
+                .font(.system(size: 50))
+                .foregroundStyle(.orange)
+            Text("Camera Access Required")
+                .font(.headline)
+            Text("Allow GlassOTP to use the camera in Settings to scan QR codes, or import a screenshot from Photos below.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                Button {
+                    UIApplication.shared.open(settingsURL)
+                } label: {
+                    Label("Open Settings", systemImage: "gear")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.glassProminent)
+            }
+        }
+        .padding(28)
+        .frame(maxWidth: .infinity, minHeight: 280)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     private var noCameraFallback: some View {
@@ -135,6 +165,10 @@ struct QRScannerSheet: View {
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.5))
+                scannerResetToken = UUID()
+            }
         }
     }
 
@@ -178,7 +212,12 @@ private final class CaptureSessionBox: @unchecked Sendable {
 
 private struct QRCameraPreview: UIViewControllerRepresentable {
     let torchOn: Bool
+    let resetToken: UUID
     let onDetected: (String) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(lastResetToken: resetToken)
+    }
 
     func makeUIViewController(context: Context) -> CameraScannerController {
         let controller = CameraScannerController()
@@ -188,6 +227,17 @@ private struct QRCameraPreview: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: CameraScannerController, context: Context) {
         uiViewController.setTorch(torchOn)
+        if context.coordinator.lastResetToken != resetToken {
+            context.coordinator.lastResetToken = resetToken
+            uiViewController.resumeScanning()
+        }
+    }
+
+    final class Coordinator {
+        var lastResetToken: UUID
+        init(lastResetToken: UUID) {
+            self.lastResetToken = lastResetToken
+        }
     }
 }
 
@@ -198,6 +248,10 @@ private final class CameraScannerController: UIViewController, AVCaptureMetadata
     private let sessionQueue = DispatchQueue(label: "com.robinvivant.glassotp.camera")
     private var previewLayer: AVCaptureVideoPreviewLayer?
     private var didEmitCode = false
+
+    func resumeScanning() {
+        didEmitCode = false
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -229,9 +283,13 @@ private final class CameraScannerController: UIViewController, AVCaptureMetadata
 
     func setTorch(_ enabled: Bool) {
         guard let device = AVCaptureDevice.default(for: .video), device.hasTorch else { return }
-        try? device.lockForConfiguration()
-        device.torchMode = enabled ? .on : .off
-        device.unlockForConfiguration()
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            device.torchMode = enabled ? .on : .off
+        } catch {
+            return
+        }
     }
 
     private func configureSession() {

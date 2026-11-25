@@ -27,3 +27,11 @@ jobs:
       - name: Run Swift package tests
         working-directory: Packages/GlassOTPCore
         run: swift test
+
+      - name: Verify open-source secret and team scrubbing
+        run: |
+          if grep -rnE "6G27LL5LJG|00008110-000C69D63E84801E" \
+            Config GlassOTP GlassOTPWidget GlassOTPMac Packages Shared project.yml README.md SECURITY.md CONTRIBUTING.md; then
+            echo "Found untracked team or device identifiers!"
+            exit 1
+          fi

@@ -4,11 +4,18 @@ public struct OTPAuthImportResult: Sendable {
     public let formatDescription: String
     public let folders: [OTPFolder]
     public let accounts: [OTPAccount]
+    public let skippedEntries: Int
 
-    public init(formatDescription: String, folders: [OTPFolder], accounts: [OTPAccount]) {
+    public init(
+        formatDescription: String,
+        folders: [OTPFolder],
+        accounts: [OTPAccount],
+        skippedEntries: Int = 0
+    ) {
         self.formatDescription = formatDescription
         self.folders = folders
         self.accounts = accounts
+        self.skippedEntries = skippedEntries
     }
 }
 
@@ -30,6 +37,9 @@ public enum OTPAuthImporter {
         password: String,
         filenameHint: String? = nil
     ) throws -> OTPAuthImportResult {
+        guard data.count <= VaultImporter.maxImportFileBytes else {
+            throw OTPImportError.corruptedArchive("Import files are limited to 20 MB.")
+        }
         guard let (format, outer) = unwrapOuterArchive(data: data, filenameHint: filenameHint) else {
             throw OTPImportError.invalidFileFormat
         }
@@ -118,6 +128,7 @@ public enum OTPAuthImporter {
         let rawFolders = innerRoot["Folders"] as? [[String: Any]] ?? []
         var importedFolders: [OTPFolder] = []
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
 
         for (folderIdx, rawFolder) in rawFolders.enumerated() {
             let folderName = (rawFolder["name"] as? String)?
@@ -138,6 +149,8 @@ public enum OTPAuthImporter {
                     sortOrder: accountIdx
                 ) {
                     importedAccounts.append(account)
+                } else {
+                    skippedEntries += 1
                 }
             }
         }
@@ -145,7 +158,8 @@ public enum OTPAuthImporter {
         return OTPAuthImportResult(
             formatDescription: "OTP Auth Backup v\(formatVersionString(version))",
             folders: importedFolders,
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -207,7 +221,7 @@ public enum OTPAuthImporter {
         switch rawAlgo {
         case 2: algorithm = .sha256
         case 3: algorithm = .sha512
-        case 4: algorithm = .md5
+        case 4: return nil
         default: algorithm = .sha1
         }
 

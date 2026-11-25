@@ -47,7 +47,7 @@ final class BiometricLockManager {
         self.biometricLockEnabled = defaults.bool(forKey: Self.lockEnabledKey)
         self.appSwitcherBlurEnabled = defaults.bool(forKey: Self.blurEnabledKey)
         self.autoLockDelaySeconds = defaults.integer(forKey: Self.autoLockDelayKey)
-        if biometricLockEnabled && canEvaluateDeviceAuthentication() {
+        if biometricLockEnabled {
             isLocked = true
         }
     }
@@ -68,10 +68,33 @@ final class BiometricLockManager {
         }
     }
 
+    var biometrySymbolName: String {
+        let context = LAContext()
+        var error: NSError?
+        _ = context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error)
+        switch context.biometryType {
+        case .faceID:
+            return "faceid"
+        case .touchID:
+            return "touchid"
+        case .opticID:
+            return "opticid"
+        default:
+            return "lock.fill"
+        }
+    }
+
     func canEvaluateDeviceAuthentication() -> Bool {
         let context = LAContext()
         var error: NSError?
         return context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error)
+    }
+
+    func shouldLockOnActivation(now: Date = Date()) -> Bool {
+        guard biometricLockEnabled else { return false }
+        if isLocked { return true }
+        guard let backgroundedAt else { return false }
+        return now.timeIntervalSince(backgroundedAt) >= TimeInterval(autoLockDelaySeconds)
     }
 
     func unlockOnLaunchIfNeeded() async {
@@ -80,11 +103,17 @@ final class BiometricLockManager {
     }
 
     func authenticate() async {
+        guard biometricLockEnabled else {
+            isLocked = false
+            return
+        }
         guard !isAuthenticating else { return }
         let context = LAContext()
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-            isLocked = false
+            isLocked = true
+            authErrorMessage = error?.localizedDescription
+                ?? "Set a device passcode or enable \(biometryDisplayName) in iOS Settings to unlock."
             return
         }
 
@@ -98,7 +127,7 @@ final class BiometricLockManager {
                 localizedReason: "Unlock your GlassOTP authenticator vault"
             )
             if success {
-                withAnimation(.easeOut(duration: 0.25)) {
+                withAnimation(.easeOut(duration: 0.2)) {
                     isLocked = false
                 }
             }
@@ -111,16 +140,26 @@ final class BiometricLockManager {
 
     func handleScenePhaseChange(_ phase: ScenePhase) {
         switch phase {
-        case .background:
-            if biometricLockEnabled && canEvaluateDeviceAuthentication() {
+        case .inactive:
+            guard biometricLockEnabled else { return }
+            if backgroundedAt == nil {
                 backgroundedAt = Date()
-                if autoLockDelaySeconds == 0 {
-                    isLocked = true
-                }
+            }
+            if autoLockDelaySeconds == 0 {
+                isLocked = true
+            }
+        case .background:
+            guard biometricLockEnabled else { return }
+            if backgroundedAt == nil {
+                backgroundedAt = Date()
+            }
+            if autoLockDelaySeconds == 0 {
+                isLocked = true
             }
         case .active:
-            guard biometricLockEnabled && canEvaluateDeviceAuthentication() else {
+            guard biometricLockEnabled else {
                 isLocked = false
+                backgroundedAt = nil
                 return
             }
             if let backgroundedAt {
@@ -133,8 +172,6 @@ final class BiometricLockManager {
             if isLocked {
                 Task { await authenticate() }
             }
-        case .inactive:
-            break
         @unknown default:
             break
         }

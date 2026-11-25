@@ -115,16 +115,22 @@ struct AccountEditorSheet: View {
                         }
 
                         if let existingAccount {
-                            Button {
-                                dismiss()
-                                vault.brandPickerAccount = existingAccount
-                            } label: {
-                                HStack {
-                                    Label("Service Logo", systemImage: "sparkles")
-                                    Spacer()
-                                    BrandAvatarView(account: existingAccount, size: 28, logoRevision: vault.logoCacheRevision)
-                                        .equatable()
+                            if vault.accounts.contains(where: { $0.id == existingAccount.id }) {
+                                Button {
+                                    dismiss()
+                                    vault.brandPickerAccount = existingAccount
+                                } label: {
+                                    HStack {
+                                        Label("Service Logo", systemImage: "sparkles")
+                                        Spacer()
+                                        BrandAvatarView(account: existingAccount, size: 28, logoRevision: vault.logoCacheRevision)
+                                            .equatable()
+                                    }
                                 }
+                            } else {
+                                Text("Save this scanned account first to choose a custom logo.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -138,21 +144,23 @@ struct AccountEditorSheet: View {
                             }
 
                             Picker("Algorithm", selection: $algorithm) {
-                                ForEach(OTPAlgorithm.allCases) { algo in
+                                ForEach(OTPAlgorithm.selectableCases) { algo in
                                     Text(algo.displayName).tag(algo)
                                 }
                             }
 
                             Picker("Digits", selection: $digits) {
-                                Text("6 Digits").tag(6)
-                                Text("7 Digits").tag(7)
-                                Text("8 Digits").tag(8)
+                                ForEach(4...10, id: \.self) { count in
+                                    Text("\(count) Digits").tag(count)
+                                }
                             }
 
                             if type == .totp {
+                                let periodOptions = Array(Set([15, 30, 60, 90, max(1, period)])).sorted()
                                 Picker("Period", selection: $period) {
-                                    Text("30 seconds").tag(30)
-                                    Text("60 seconds").tag(60)
+                                    ForEach(periodOptions, id: \.self) { secs in
+                                        Text("\(secs) seconds").tag(secs)
+                                    }
                                 }
                             } else {
                                 Stepper("Counter: \(counter)", value: $counter, in: 0...UInt64.max)
@@ -189,8 +197,9 @@ struct AccountEditorSheet: View {
                             customBrandSlug: existingAccount?.customBrandSlug,
                             customLogoDomain: existingAccount?.customLogoDomain
                         )
-                        vault.upsertAccount(updated)
-                        dismiss()
+                        if vault.upsertAccount(updated) {
+                            dismiss()
+                        }
                     }
                     .disabled(decodedSecret == nil || (issuer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 }

@@ -29,9 +29,14 @@ public enum SharedClipboardPreferences {
 }
 
 public protocol VaultPersistence: Sendable {
+    func isICloudSyncEnabled() -> Bool
     func loadSnapshot() throws -> OTPVaultSnapshot?
     func saveSnapshot(_ snapshot: OTPVaultSnapshot) throws
-    func setICloudSyncEnabled(_ enabled: Bool)
+    @discardableResult
+    func saveMergedSnapshot(_ snapshot: OTPVaultSnapshot) throws -> OTPVaultSnapshot
+    @discardableResult
+    func mutateSnapshot(_ transform: (inout OTPVaultSnapshot) -> Void) throws -> OTPVaultSnapshot
+    func setICloudSyncEnabled(_ enabled: Bool) throws
 }
 
 public final class InMemoryVaultPersistence: VaultPersistence, @unchecked Sendable {
@@ -43,6 +48,10 @@ public final class InMemoryVaultPersistence: VaultPersistence, @unchecked Sendab
         self.snapshot = snapshot
     }
 
+    public func isICloudSyncEnabled() -> Bool {
+        lock.withLock { iCloudSyncEnabled }
+    }
+
     public func loadSnapshot() throws -> OTPVaultSnapshot? {
         lock.withLock { snapshot }
     }
@@ -51,7 +60,27 @@ public final class InMemoryVaultPersistence: VaultPersistence, @unchecked Sendab
         lock.withLock { self.snapshot = snapshot }
     }
 
-    public func setICloudSyncEnabled(_ enabled: Bool) {
+    @discardableResult
+    public func saveMergedSnapshot(_ local: OTPVaultSnapshot) throws -> OTPVaultSnapshot {
+        lock.withLock {
+            let merged = self.snapshot?.merged(with: local) ?? local
+            self.snapshot = merged
+            return merged
+        }
+    }
+
+    @discardableResult
+    public func mutateSnapshot(_ transform: (inout OTPVaultSnapshot) -> Void) throws -> OTPVaultSnapshot {
+        lock.withLock {
+            var current = self.snapshot ?? OTPVaultSnapshot()
+            transform(&current)
+            current.updatedAt = Date()
+            self.snapshot = current
+            return current
+        }
+    }
+
+    public func setICloudSyncEnabled(_ enabled: Bool) throws {
         lock.withLock { iCloudSyncEnabled = enabled }
     }
 }
@@ -75,7 +104,6 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
 
     private let lock = NSLock()
     private let defaults: UserDefaults
-    private var iCloudSyncEnabled: Bool
 
     public init(defaults: UserDefaults? = UserDefaults(suiteName: GlassOTPConstants.appGroupID)) {
         let resolvedDefaults = defaults ?? .standard
@@ -83,28 +111,101 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
         if resolvedDefaults.object(forKey: GlassOTPConstants.iCloudSyncPreferenceKey) == nil {
             resolvedDefaults.set(true, forKey: GlassOTPConstants.iCloudSyncPreferenceKey)
         }
-        self.iCloudSyncEnabled = resolvedDefaults.bool(forKey: GlassOTPConstants.iCloudSyncPreferenceKey)
+    }
+
+    private func isICloudSyncEnabledUnlocked() -> Bool {
+        if defaults.object(forKey: GlassOTPConstants.iCloudSyncPreferenceKey) == nil {
+            defaults.set(true, forKey: GlassOTPConstants.iCloudSyncPreferenceKey)
+        }
+        return defaults.bool(forKey: GlassOTPConstants.iCloudSyncPreferenceKey)
     }
 
     public func isICloudSyncEnabled() -> Bool {
-        lock.withLock { iCloudSyncEnabled }
+        lock.withLock { isICloudSyncEnabledUnlocked() }
     }
 
-    public func setICloudSyncEnabled(_ enabled: Bool) {
-        let currentSnapshot = try? loadSnapshot()
-        lock.withLock {
-            iCloudSyncEnabled = enabled
+    public func setICloudSyncEnabled(_ enabled: Bool) throws {
+        try setICloudSyncEnabled(enabled, removeOppositeBucket: true)
+    }
+
+    @discardableResult
+    public func setICloudSyncEnabled(_ enabled: Bool, removeOppositeBucket: Bool = true) throws -> OTPVaultSnapshot? {
+        try lock.withLock {
+            let syncSnapshot = try readKeychainData(synchronizable: true).map(decodeSnapshot)
+            let localSnapshot = try readKeychainData(synchronizable: false).map(decodeSnapshot)
+
+            let combined: OTPVaultSnapshot?
+            if let syncSnapshot, let localSnapshot {
+                combined = enabled ? localSnapshot.merged(with: syncSnapshot) : syncSnapshot.merged(with: localSnapshot)
+            } else if enabled {
+                combined = localSnapshot ?? syncSnapshot
+            } else {
+                combined = syncSnapshot ?? localSnapshot
+            }
+
+            if let combined {
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                let data = try encoder.encode(combined)
+                let storedInSharedGroup = try writeKeychainData(data, synchronizable: enabled)
+                #if targetEnvironment(simulator)
+                if !storedInSharedGroup {
+                    try writeSimulatorFallback(data)
+                } else {
+                    try? FileManager.default.removeItem(at: simulatorFallbackURL())
+                }
+                #else
+                _ = storedInSharedGroup
+                #endif
+            }
+
             defaults.set(enabled, forKey: GlassOTPConstants.iCloudSyncPreferenceKey)
-        }
-        if let currentSnapshot {
-            try? saveSnapshot(currentSnapshot)
+
+            if removeOppositeBucket {
+                deleteKeychainItem(synchronizable: !enabled)
+            }
+
+            return combined
         }
     }
 
     public func loadSnapshot() throws -> OTPVaultSnapshot? {
-        let syncEnabled = lock.withLock { iCloudSyncEnabled }
-        if let data = try readKeychainData(synchronizable: syncEnabled) ?? readKeychainData(synchronizable: !syncEnabled) {
-            return try decodeSnapshot(data)
+        try lock.withLock { try loadSnapshotUnlocked() }
+    }
+
+    public func saveSnapshot(_ snapshot: OTPVaultSnapshot) throws {
+        try lock.withLock {
+            try writeSnapshotUnlocked(snapshot)
+        }
+    }
+
+    @discardableResult
+    public func saveMergedSnapshot(_ local: OTPVaultSnapshot) throws -> OTPVaultSnapshot {
+        try lock.withLock {
+            let merged = try loadSnapshotUnlocked()?.merged(with: local) ?? local
+            try writeSnapshotUnlocked(merged)
+            return merged
+        }
+    }
+
+    @discardableResult
+    public func mutateSnapshot(_ transform: (inout OTPVaultSnapshot) -> Void) throws -> OTPVaultSnapshot {
+        try lock.withLock {
+            var current = try loadSnapshotUnlocked() ?? OTPVaultSnapshot()
+            transform(&current)
+            current.updatedAt = Date()
+            try writeSnapshotUnlocked(current)
+            return current
+        }
+    }
+
+    private func loadSnapshotUnlocked() throws -> OTPVaultSnapshot? {
+        let syncEnabled = isICloudSyncEnabledUnlocked()
+        if let primaryData = try readKeychainData(synchronizable: syncEnabled) {
+            return try decodeSnapshot(primaryData)
+        }
+        if syncEnabled, let localFallback = try readKeychainData(synchronizable: false) {
+            return try decodeSnapshot(localFallback)
         }
 
         #if targetEnvironment(simulator)
@@ -116,20 +217,17 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
         return nil
     }
 
-    public func saveSnapshot(_ snapshot: OTPVaultSnapshot) throws {
+    private func writeSnapshotUnlocked(_ snapshot: OTPVaultSnapshot) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(snapshot)
-        let syncEnabled = lock.withLock { iCloudSyncEnabled }
-
-        // Remove stale entries in the opposite synchronizable bucket so only one authoritative item exists.
-        deleteKeychainItem(synchronizable: !syncEnabled)
+        let syncEnabled = isICloudSyncEnabledUnlocked()
 
         let storedInSharedGroup = try writeKeychainData(data, synchronizable: syncEnabled)
 
         #if targetEnvironment(simulator)
         if !storedInSharedGroup {
-            try? writeSimulatorFallback(data)
+            try writeSimulatorFallback(data)
         } else {
             try? FileManager.default.removeItem(at: simulatorFallbackURL())
         }
@@ -149,10 +247,14 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
     }
 
     private func resolvedAccessGroup() -> String? {
-        if let prefix = Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String,
-           !prefix.isEmpty,
-           !prefix.contains("$(") {
-            return prefix + GlassOTPConstants.keychainAccessGroupSuffix
+        if let prefix = Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String {
+            let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty,
+               !trimmed.contains("$("),
+               trimmed != ".",
+               trimmed.rangeOfCharacter(from: .alphanumerics) != nil {
+                return trimmed + GlassOTPConstants.keychainAccessGroupSuffix
+            }
         }
         return nil
     }
@@ -199,9 +301,11 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
         if status == errSecItemNotFound {
             return nil
         }
+        #if targetEnvironment(simulator)
         if status == errSecMissingEntitlement {
             return nil
         }
+        #endif
         throw KeychainVaultError.unexpectedStatus(status)
     }
 
@@ -221,23 +325,28 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
         if unscopedStatus == errSecSuccess {
             return false
         }
+        #if targetEnvironment(simulator)
         if unscopedStatus == errSecMissingEntitlement {
             return false
         }
+        #endif
         throw KeychainVaultError.unexpectedStatus(unscopedStatus)
     }
 
     private func upsertKeychain(data: Data, synchronizable: Bool, accessGroup: String?) -> OSStatus {
         let query = baseQuery(synchronizable: synchronizable, accessGroup: accessGroup)
+        let accessibility: CFString = synchronizable
+            ? kSecAttrAccessibleAfterFirstUnlock
+            : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let updateAttributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: accessibility,
         ]
         let updateStatus = SecItemUpdate(query as CFDictionary, updateAttributes as CFDictionary)
         if updateStatus == errSecItemNotFound {
             var addQuery = query
             addQuery[kSecValueData as String] = data
-            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            addQuery[kSecAttrAccessible as String] = accessibility
             return SecItemAdd(addQuery as CFDictionary, nil)
         }
         return updateStatus
@@ -281,10 +390,15 @@ public enum SharedWidgetStateStore {
     }
 
     public static func wasRecentlyCopied(accountID: UUID, now: Date = Date()) -> Bool {
+        copyExpiry(accountID: accountID, now: now) != nil
+    }
+
+    public static func copyExpiry(accountID: UUID, now: Date = Date()) -> Date? {
         let ts = defaults.double(forKey: copiedTimestampPrefix + accountID.uuidString)
-        guard ts > 0 else { return false }
+        guard ts > 0 else { return nil }
         let delta = now.timeIntervalSince1970 - ts
-        return delta >= 0 && delta <= 2.5
+        guard delta >= 0 && delta <= 2.5 else { return nil }
+        return Date(timeIntervalSince1970: ts + 2.5)
     }
 
     public static func reveal(accountID: UUID, for seconds: TimeInterval = 15, now: Date = Date()) {

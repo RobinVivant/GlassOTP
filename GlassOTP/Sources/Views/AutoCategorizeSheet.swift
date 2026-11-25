@@ -8,7 +8,7 @@ struct AutoCategorizeSheet: View {
     @State private var plan: CategorizationPlan?
     @State private var assignments: [UUID: OTPCategory] = [:]
     @State private var selectedIDs: Set<UUID> = []
-    @State private var fetchWebLogos = true
+    @State private var fetchWebLogos = false
     @State private var removeEmptyDefaultFolder = true
     @State private var isApplying = false
 
@@ -94,8 +94,15 @@ struct AutoCategorizeSheet: View {
                 }
             }
 
-            Toggle("Fetch web logos for unmatched services", isOn: $fetchWebLogos)
-                .font(.subheadline)
+            Toggle(isOn: $fetchWebLogos) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Fetch web logos for custom domains")
+                        .font(.subheadline)
+                    Text("Connects to each domain or Google Favicons to download icons for selected accounts.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             if hasDefaultAccountsFolder {
                 Toggle("Remove empty 'Accounts' folder", isOn: $removeEmptyDefaultFolder)
@@ -245,8 +252,9 @@ struct AutoCategorizeSheet: View {
         vault.applyCategorization(filteredAssignments, removeEmptyDefaultFolder: removeEmptyDefaultFolder)
 
         if fetchWebLogos {
+            let selectedAccounts = vault.accounts.filter { selectedIDs.contains($0.id) }
             Task {
-                let fetched = await vault.fetchMissingWebLogos()
+                let fetched = await vault.fetchMissingWebLogos(for: selectedAccounts)
                 isApplying = false
                 if fetched > 0 {
                     vault.alertMessage = "Organized \(filteredAssignments.count) accounts and fetched \(fetched) service \(fetched == 1 ? "logo" : "logos")."

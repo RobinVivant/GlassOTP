@@ -262,8 +262,9 @@ public enum CryptoPrimitives {
               r >= 1,
               p >= 1,
               keyLength >= 1,
+              keyLength <= 4096,
               n <= (1 << 20),
-              r <= 64,
+              r <= 32,
               p <= 16 else {
             throw OTPImportError.corruptedArchive("Invalid scrypt parameters.")
         }
@@ -271,10 +272,14 @@ public enum CryptoPrimitives {
         let (blockBytes, overflow1) = 128.multipliedReportingOverflow(by: r)
         let (scratchBytes, overflow2) = blockBytes.multipliedReportingOverflow(by: n)
         let (initialBytes, overflow3) = blockBytes.multipliedReportingOverflow(by: p)
-        guard !overflow1, !overflow2, !overflow3,
-              scratchBytes <= 256 * 1024 * 1024,
+        let (nr, overflow4) = n.multipliedReportingOverflow(by: r)
+        let (nrp, overflow5) = nr.multipliedReportingOverflow(by: p)
+        guard !overflow1, !overflow2, !overflow3, !overflow4, !overflow5,
+              scratchBytes <= 64 * 1024 * 1024,
+              initialBytes <= 64 * 1024,
+              nrp <= 2_097_152,
               initialBytes > 0 else {
-            throw OTPImportError.corruptedArchive("scrypt memory parameters out of supported range.")
+            throw OTPImportError.corruptedArchive("scrypt memory or work parameters out of supported range.")
         }
 
         let initialKeyMaterial = try pbkdf2SHA256(
@@ -483,6 +488,9 @@ public enum CryptoPrimitives {
         }
         guard data[data.startIndex] == 3 else {
             throw OTPImportError.unsupportedVersion(Double(data[data.startIndex]))
+        }
+        guard data[data.startIndex + 1] == 1 else {
+            throw OTPImportError.unsupportedEncryptedFormat("Unsupported RNCryptor backup options.")
         }
 
         let start = data.startIndex

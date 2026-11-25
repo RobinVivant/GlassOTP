@@ -204,13 +204,15 @@ struct MacBrandBadgeView: View, Equatable {
 
     var body: some View {
         let matched = BrandCatalog.shared.match(account: account)
+        let customDomain = BrandCatalog.cleanedDomain(account.customLogoDomain)
+        let resolvedBrand = customDomain != nil ? nil : matched
         let cornerRadius = size * 0.30
 
         Group {
-            if let matched,
-               let svgPath = matched.svgPath,
+            if let resolvedBrand,
+               let svgPath = resolvedBrand.svgPath,
                let nsImage = MacBrandImageCache.shared.vectorBadge(
-                   for: matched,
+                   for: resolvedBrand,
                    svgPath: svgPath,
                    size: size,
                    scale: displayScale
@@ -218,7 +220,7 @@ struct MacBrandBadgeView: View, Equatable {
                 Image(nsImage: nsImage)
                     .resizable()
                     .frame(width: size, height: size)
-            } else if let domain = BrandCatalog.shared.inferredDomain(for: account, includeHeuristicFallback: true),
+            } else if let domain = customDomain ?? BrandCatalog.shared.inferredDomain(for: account, includeHeuristicFallback: false),
                       let webImage = MacBrandImageCache.shared.webLogo(forDomain: domain) {
                 ZStack {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

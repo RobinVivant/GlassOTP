@@ -7,6 +7,7 @@ public enum OTPUriError: Error, LocalizedError, Equatable, Sendable {
     case missingSecret
     case invalidBase32Secret
     case invalidMigrationPayload
+    case unsupportedAlgorithm(String)
 
     public var errorDescription: String? {
         switch self {
@@ -22,6 +23,8 @@ public enum OTPUriError: Error, LocalizedError, Equatable, Sendable {
             "The secret key is not valid Base32."
         case .invalidMigrationPayload:
             "Unable to decode Google Authenticator migration payload."
+        case .unsupportedAlgorithm(let algorithm):
+            "Unsupported OTP algorithm: \(algorithm). Use SHA1, SHA256, or SHA512."
         }
     }
 }
@@ -61,11 +64,11 @@ public enum OTPUriParser {
             throw OTPUriError.unsupportedOTPType(host)
         }
 
-        var rawPath = url.path
-        if rawPath.hasPrefix("/") {
-            rawPath.removeFirst()
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        var decodedPath = components?.path ?? url.path
+        if decodedPath.hasPrefix("/") {
+            decodedPath.removeFirst()
         }
-        let decodedPath = rawPath.removingPercentEncoding ?? rawPath
 
         var pathIssuer = ""
         var label = decodedPath
@@ -74,7 +77,6 @@ public enum OTPUriParser {
             label = String(decodedPath[decodedPath.index(after: colonIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         var queryMap: [String: String] = [:]
         for item in components?.queryItems ?? [] {
             if let value = item.value {
@@ -99,15 +101,17 @@ public enum OTPUriParser {
         let issuer = (queryIssuer?.isEmpty == false ? queryIssuer : nil) ?? pathIssuer
 
         let algorithm: OTPAlgorithm
-        switch queryMap["algorithm"]?.lowercased() {
+        switch queryMap["algorithm"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "sha256":
             algorithm = .sha256
         case "sha512":
             algorithm = .sha512
         case "md5":
-            algorithm = .md5
-        default:
+            throw OTPUriError.unsupportedAlgorithm("MD5")
+        case "sha1", "", nil:
             algorithm = .sha1
+        case let other?:
+            throw OTPUriError.unsupportedAlgorithm(other.uppercased())
         }
 
         let digits = Int(queryMap["digits"] ?? "") ?? 6
@@ -231,7 +235,7 @@ public enum OTPUriParser {
                 switch val {
                 case 2: algorithm = .sha256
                 case 3: algorithm = .sha512
-                case 4: algorithm = .md5
+                case 4: throw OTPUriError.unsupportedAlgorithm("MD5")
                 default: algorithm = .sha1
                 }
             case (5, 0):
@@ -301,12 +305,17 @@ private struct ProtobufReader {
 
     mutating func readTag() throws -> (fieldNumber: Int, wireType: Int) {
         let tag = try readVarint()
-        return (Int(tag >> 3), Int(tag & 0x07))
+        guard let fieldNumber = Int(exactly: tag >> 3) else {
+            throw OTPUriError.invalidMigrationPayload
+        }
+        return (fieldNumber, Int(tag & 0x07))
     }
 
     mutating func readLengthDelimited() throws -> Data {
-        let length = Int(try readVarint())
-        guard length >= 0, offset + length <= bytes.count else {
+        let rawLength = try readVarint()
+        guard let length = Int(exactly: rawLength),
+              length >= 0,
+              length <= bytes.count - offset else {
             throw OTPUriError.invalidMigrationPayload
         }
         let slice = Data(bytes[offset..<(offset + length)])
@@ -319,12 +328,12 @@ private struct ProtobufReader {
         case 0:
             _ = try readVarint()
         case 1:
-            guard offset + 8 <= bytes.count else { throw OTPUriError.invalidMigrationPayload }
+            guard bytes.count - offset >= 8 else { throw OTPUriError.invalidMigrationPayload }
             offset += 8
         case 2:
             _ = try readLengthDelimited()
         case 5:
-            guard offset + 4 <= bytes.count else { throw OTPUriError.invalidMigrationPayload }
+            guard bytes.count - offset >= 4 else { throw OTPUriError.invalidMigrationPayload }
             offset += 4
         default:
             throw OTPUriError.invalidMigrationPayload

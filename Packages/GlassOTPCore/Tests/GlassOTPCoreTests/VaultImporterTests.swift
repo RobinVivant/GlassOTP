@@ -443,4 +443,39 @@ struct VaultImporterTests {
         #expect(uriRes.accounts.count == 2)
         #expect(uriRes.accounts[1].counter == 3)
     }
+
+    @Test("VaultImporter counts skipped entries, rejects oversized payloads, and caps Aegis slots")
+    func importerSkippedCountsAndCaps() throws {
+        let aegisWithSkipped = Data("""
+        {
+          "version": 1,
+          "header": { "slots": null, "params": null },
+          "db": {
+            "entries": [
+              { "type": "steam", "issuer": "Steam", "name": "user", "info": { "secret": "JBSWY3DPEHPK3PXP", "algo": "SHA1", "digits": 5, "period": 30 } },
+              { "type": "totp", "issuer": "BadAlgo", "name": "md5", "info": { "secret": "JBSWY3DPEHPK3PXP", "algo": "MD5", "digits": 6, "period": 30 } },
+              { "type": "totp", "issuer": "GitHub", "name": "valid", "info": { "secret": "JBSWY3DPEHPK3PXP", "algo": "SHA1", "digits": 6, "period": 30 } }
+            ]
+          }
+        }
+        """.utf8)
+        let aegisRes = try VaultImporter.importFile(data: aegisWithSkipped)
+        #expect(aegisRes.accounts.count == 1)
+        #expect(aegisRes.skippedEntries == 2)
+
+        let uriWithSkipped = Data("""
+        otpauth://totp/Valid:alex?secret=JBSWY3DPEHPK3PXP&issuer=Valid
+        otpauth://totp/Legacy:alex?secret=JBSWY3DPEHPK3PXP&algorithm=MD5
+        not-a-valid-line
+        """.utf8)
+        let uriRes = try VaultImporter.importFile(data: uriWithSkipped)
+        #expect(uriRes.accounts.count == 1)
+        #expect(uriRes.skippedEntries == 2)
+
+        let oversized = Data(repeating: 0x41, count: VaultImporter.maxImportFileBytes + 1)
+        #expect(VaultImporter.inspect(data: oversized) == .fileTooLarge("Import files are limited to 20 MB."))
+        #expect(throws: OTPImportError.self) {
+            try VaultImporter.importFile(data: oversized)
+        }
+    }
 }

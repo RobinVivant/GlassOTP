@@ -6,10 +6,14 @@ public enum VaultImportInspection: Sendable, Equatable {
     case encrypted(formatHint: String)
     case plaintext(formatHint: String)
     case unsupportedEncrypted(formatName: String, guidance: String)
+    case fileTooLarge(String)
     case unrecognized
 }
 
 public enum VaultImporter {
+    public static let maxImportFileBytes = 20 * 1024 * 1024
+    private static let maxAegisPasswordSlots = 8
+
     private enum DetectedKind {
         case glassOTP
         case authProV2
@@ -31,6 +35,9 @@ public enum VaultImporter {
     }
 
     public static func inspect(data: Data, filenameHint: String? = nil) -> VaultImportInspection {
+        guard data.count <= maxImportFileBytes else {
+            return .fileTooLarge("Import files are limited to 20 MB.")
+        }
         guard let kind = detect(data: data, filenameHint: filenameHint) else {
             return .unrecognized
         }
@@ -84,6 +91,9 @@ public enum VaultImporter {
         password: String? = nil,
         filenameHint: String? = nil
     ) throws -> OTPAuthImportResult {
+        guard data.count <= maxImportFileBytes else {
+            throw OTPImportError.corruptedArchive("Import files are limited to 20 MB.")
+        }
         guard let kind = detect(data: data, filenameHint: filenameHint) else {
             throw OTPImportError.invalidFileFormat
         }
@@ -292,7 +302,7 @@ public enum VaultImporter {
             throw OTPImportError.corruptedArchive("Invalid Aegis encrypted vault header.")
         }
 
-        let passwordSlots = slots.filter { intValue($0["type"]) == 1 }
+        let passwordSlots = slots.filter { intValue($0["type"]) == 1 }.prefix(maxAegisPasswordSlots)
         guard !passwordSlots.isEmpty else {
             throw OTPImportError.unsupportedEncryptedFormat("This Aegis vault has no password slot configured.")
         }
@@ -380,6 +390,7 @@ public enum VaultImporter {
 
         let entries = db["entries"] as? [[String: Any]] ?? []
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
 
         for entry in entries {
             let rawType = (entry["type"] as? String ?? "totp").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -390,18 +401,20 @@ public enum VaultImporter {
             case "hotp":
                 otpType = .hotp
             default:
+                skippedEntries += 1
                 continue // Ignore Steam / Yandex / mOTP entries safely
             }
 
             let info = entry["info"] as? [String: Any] ?? [:]
             guard let secretStr = trimmedNonEmpty(info["secret"] as? String),
-                  let secret = decodeBase32Flexible(secretStr) else {
+                  let secret = decodeBase32Flexible(secretStr),
+                  let algorithm = parseAlgorithm(info["algo"] as? String) else {
+                skippedEntries += 1
                 continue
             }
 
             let issuer = trimmed(entry["issuer"] as? String) ?? ""
             let label = trimmed(entry["name"] as? String) ?? ""
-            let algorithm = parseAlgorithm(info["algo"] as? String)
             let digits = intValue(info["digits"]) ?? 6
             let period = intValue(info["period"]) ?? 30
             let counter = uint64Value(info["counter"]) ?? 0
@@ -440,7 +453,8 @@ public enum VaultImporter {
         return OTPAuthImportResult(
             formatDescription: formatDescription,
             folders: folderBuilder.folders,
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -511,6 +525,7 @@ public enum VaultImporter {
         }
 
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
         for service in services {
             let otp = service["otp"] as? [String: Any] ?? [:]
             let rawTokenType = (otp["tokenType"] as? String ?? "TOTP").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -521,12 +536,15 @@ public enum VaultImporter {
             case "TOTP", "":
                 otpType = .totp
             default:
+                skippedEntries += 1
                 continue // Skip STEAM
             }
 
             let rawSecret = trimmedNonEmpty(service["secret"] as? String) ?? trimmedNonEmpty(otp["secret"] as? String)
             guard let secretStr = rawSecret,
-                  let secret = decodeBase32Flexible(secretStr) else {
+                  let secret = decodeBase32Flexible(secretStr),
+                  let algorithm = parseAlgorithm(otp["algorithm"] as? String) else {
+                skippedEntries += 1
                 continue
             }
 
@@ -540,7 +558,6 @@ public enum VaultImporter {
             let (resolvedIssuer, resolvedLabel) = normalizeIssuerAndLabel(issuer: chosenIssuer, label: rawAccount)
             let finalIssuer = resolvedIssuer.isEmpty ? tileName : resolvedIssuer
 
-            let algorithm = parseAlgorithm(otp["algorithm"] as? String)
             let digits = intValue(otp["digits"]) ?? 6
             let period = intValue(otp["period"]) ?? 30
             let counter = uint64Value(otp["counter"]) ?? 0
@@ -579,7 +596,8 @@ public enum VaultImporter {
         return OTPAuthImportResult(
             formatDescription: formatDescription,
             folders: folderBuilder.folders,
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -599,6 +617,7 @@ public enum VaultImporter {
 
         let items = root["items"] as? [[String: Any]] ?? []
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
 
         for item in items {
             guard let login = item["login"] as? [String: Any],
@@ -622,6 +641,7 @@ public enum VaultImporter {
                 fallbackIssuer: fallbackIssuer,
                 fallbackLabel: username
             ) else {
+                skippedEntries += 1
                 continue
             }
 
@@ -638,7 +658,8 @@ public enum VaultImporter {
         return OTPAuthImportResult(
             formatDescription: "Bitwarden JSON",
             folders: folderBuilder.folders,
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -674,7 +695,8 @@ public enum VaultImporter {
         result = OTPAuthImportResult(
             formatDescription: "Authenticator Pro Encrypted Backup",
             folders: result.folders,
-            accounts: result.accounts
+            accounts: result.accounts,
+            skippedEntries: result.skippedEntries
         )
         return result
     }
@@ -706,6 +728,7 @@ public enum VaultImporter {
 
         let rawAuthenticators = root["Authenticators"] as? [[String: Any]] ?? []
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
 
         for entry in rawAuthenticators {
             let otpType: OTPType
@@ -713,13 +736,17 @@ public enum VaultImporter {
                 switch typeInt {
                 case 1: otpType = .hotp
                 case 2: otpType = .totp
-                default: continue // Ignore mOTP / Steam / Yandex
+                default:
+                    skippedEntries += 1
+                    continue // Ignore mOTP / Steam / Yandex
                 }
             } else if let typeStr = entry["Type"] as? String {
                 switch typeStr.lowercased() {
                 case "hotp": otpType = .hotp
                 case "totp": otpType = .totp
-                default: continue
+                default:
+                    skippedEntries += 1
+                    continue
                 }
             } else {
                 otpType = .totp
@@ -727,6 +754,7 @@ public enum VaultImporter {
 
             guard let secretStr = trimmedNonEmpty(entry["Secret"] as? String),
                   let secret = decodeBase32Flexible(secretStr) else {
+                skippedEntries += 1
                 continue
             }
 
@@ -737,8 +765,11 @@ public enum VaultImporter {
                 case 2: algorithm = .sha512
                 default: algorithm = .sha1
                 }
+            } else if let parsedAlgo = parseAlgorithm(entry["Algorithm"] as? String) {
+                algorithm = parsedAlgo
             } else {
-                algorithm = parseAlgorithm(entry["Algorithm"] as? String)
+                skippedEntries += 1
+                continue
             }
 
             let issuer = trimmed(entry["Issuer"] as? String) ?? ""
@@ -772,7 +803,8 @@ public enum VaultImporter {
         return OTPAuthImportResult(
             formatDescription: "Authenticator Pro / Stratum",
             folders: folderBuilder.folders,
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -781,6 +813,7 @@ public enum VaultImporter {
     private static func decodeFreeOTPPlus(root: [String: Any]) throws -> OTPAuthImportResult {
         let tokens = root["tokens"] as? [[String: Any]] ?? []
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
 
         for token in tokens {
             let rawType = (token["type"] as? String ?? "TOTP").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -788,7 +821,9 @@ public enum VaultImporter {
             switch rawType {
             case "HOTP": otpType = .hotp
             case "TOTP": otpType = .totp
-            default: continue
+            default:
+                skippedEntries += 1
+                continue
             }
 
             let secret: Data?
@@ -802,7 +837,9 @@ public enum VaultImporter {
                 secret = nil
             }
 
-            guard let secret, !secret.isEmpty else {
+            guard let secret, !secret.isEmpty,
+                  let algorithm = parseAlgorithm(token["algo"] as? String) else {
+                skippedEntries += 1
                 continue
             }
 
@@ -818,7 +855,7 @@ public enum VaultImporter {
                     label: resolvedLabel,
                     secret: secret,
                     type: otpType,
-                    algorithm: parseAlgorithm(token["algo"] as? String),
+                    algorithm: algorithm,
                     digits: intValue(token["digits"]) ?? 6,
                     period: intValue(token["period"]) ?? 30,
                     counter: uint64Value(token["counter"]) ?? 0,
@@ -834,7 +871,8 @@ public enum VaultImporter {
         return OTPAuthImportResult(
             formatDescription: "FreeOTP+ Backup",
             folders: [],
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -843,12 +881,14 @@ public enum VaultImporter {
     private static func decodeProtonAuthenticator(root: [String: Any]) throws -> OTPAuthImportResult {
         let entries = root["entries"] as? [[String: Any]] ?? []
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
 
         for entry in entries {
             guard let content = entry["content"] as? [String: Any],
                   let uriStr = trimmedNonEmpty(content["uri"] as? String),
                   let url = URL(string: uriStr),
                   var account = try? OTPUriParser.parseOTPAuthURL(url) else {
+                skippedEntries += 1
                 continue
             }
 
@@ -868,7 +908,8 @@ public enum VaultImporter {
         return OTPAuthImportResult(
             formatDescription: "Proton Authenticator",
             folders: [],
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -876,6 +917,7 @@ public enum VaultImporter {
 
     private static func decodeRaivoJSON(items: [[String: Any]]) throws -> OTPAuthImportResult {
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
 
         for item in items {
             let kindRaw = (item["kind"] as? String ?? "TOTP").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -883,11 +925,15 @@ public enum VaultImporter {
             switch kindRaw {
             case "HOTP": otpType = .hotp
             case "TOTP", "": otpType = .totp
-            default: continue
+            default:
+                skippedEntries += 1
+                continue
             }
 
             guard let secretStr = trimmedNonEmpty(item["secret"] as? String),
-                  let secret = decodeBase32Flexible(secretStr) else {
+                  let secret = decodeBase32Flexible(secretStr),
+                  let algorithm = parseAlgorithm(item["algorithm"] as? String) else {
+                skippedEntries += 1
                 continue
             }
 
@@ -901,7 +947,7 @@ public enum VaultImporter {
                     label: resolvedLabel,
                     secret: secret,
                     type: otpType,
-                    algorithm: parseAlgorithm(item["algorithm"] as? String),
+                    algorithm: algorithm,
                     digits: intValue(item["digits"]) ?? 6,
                     period: intValue(item["timer"]) ?? 30,
                     counter: uint64Value(item["counter"]) ?? 0,
@@ -918,7 +964,8 @@ public enum VaultImporter {
         return OTPAuthImportResult(
             formatDescription: "Raivo OTP Export",
             folders: [],
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -927,6 +974,7 @@ public enum VaultImporter {
     private static func decodeAndOTPJSON(items: [[String: Any]]) throws -> OTPAuthImportResult {
         var folderBuilder = FolderBuilder()
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
 
         for item in items {
             let rawType = (item["type"] as? String ?? "TOTP").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -934,11 +982,15 @@ public enum VaultImporter {
             switch rawType {
             case "HOTP": otpType = .hotp
             case "TOTP", "": otpType = .totp
-            default: continue // Skip STEAM / MOTP
+            default:
+                skippedEntries += 1
+                continue // Skip STEAM / MOTP
             }
 
             guard let secretStr = trimmedNonEmpty(item["secret"] as? String),
-                  let secret = decodeBase32Flexible(secretStr) else {
+                  let secret = decodeBase32Flexible(secretStr),
+                  let algorithm = parseAlgorithm(item["algorithm"] as? String) else {
+                skippedEntries += 1
                 continue
             }
 
@@ -960,7 +1012,7 @@ public enum VaultImporter {
                     label: resolvedLabel,
                     secret: secret,
                     type: otpType,
-                    algorithm: parseAlgorithm(item["algorithm"] as? String),
+                    algorithm: algorithm,
                     digits: intValue(item["digits"]) ?? 6,
                     period: intValue(item["period"]) ?? 30,
                     counter: uint64Value(item["counter"]) ?? 0,
@@ -977,7 +1029,8 @@ public enum VaultImporter {
         return OTPAuthImportResult(
             formatDescription: "andOTP Export",
             folders: folderBuilder.folders,
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -999,16 +1052,22 @@ public enum VaultImporter {
 
     private static func decodeURIList(text: String) throws -> OTPAuthImportResult {
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
         for rawLine in text.components(separatedBy: .newlines) {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty, !line.hasPrefix("#") else { continue }
             let lower = line.lowercased()
-            guard lower.hasPrefix("otpauth://") || lower.hasPrefix("otpauth-migration://") else { continue }
+            guard lower.hasPrefix("otpauth://") || lower.hasPrefix("otpauth-migration://") else {
+                skippedEntries += 1
+                continue
+            }
             if let parsed = try? OTPUriParser.parse(line) {
                 for var account in parsed {
                     account.sortOrder = importedAccounts.count
                     importedAccounts.append(account)
                 }
+            } else {
+                skippedEntries += 1
             }
         }
 
@@ -1019,7 +1078,8 @@ public enum VaultImporter {
         return OTPAuthImportResult(
             formatDescription: "OTP URI List",
             folders: [],
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -1095,6 +1155,7 @@ public enum VaultImporter {
 
         var folderBuilder = FolderBuilder()
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
 
         for row in rows.dropFirst() {
             guard otpCol < row.count,
@@ -1115,6 +1176,7 @@ public enum VaultImporter {
                 fallbackIssuer: fallbackIssuer,
                 fallbackLabel: fallbackLabel
             ) else {
+                skippedEntries += 1
                 continue
             }
 
@@ -1123,7 +1185,11 @@ public enum VaultImporter {
                     account.type = .hotp
                 }
                 if let algoStr = firstCell(row, keys: ["algorithm", "algo"]) {
-                    account.algorithm = parseAlgorithm(algoStr)
+                    guard let parsedAlgo = parseAlgorithm(algoStr) else {
+                        skippedEntries += 1
+                        continue
+                    }
+                    account.algorithm = parsedAlgo
                 }
                 if let digitsStr = firstCell(row, keys: ["digits"]), let d = Int(digitsStr) {
                     account.digits = (4...10).contains(d) ? d : account.digits
@@ -1155,7 +1221,8 @@ public enum VaultImporter {
         return OTPAuthImportResult(
             formatDescription: formatLabel,
             folders: folderBuilder.folders,
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -1302,14 +1369,14 @@ public enum VaultImporter {
         return decoded
     }
 
-    private static func parseAlgorithm(_ raw: String?) -> OTPAlgorithm {
+    private static func parseAlgorithm(_ raw: String?) -> OTPAlgorithm? {
         switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "sha256", "hmacsha256":
             return .sha256
         case "sha512", "hmacsha512":
             return .sha512
-        case "md5", "hmacmd5":
-            return .md5
+        case "md5", "hmacmd5", "hmac-md5":
+            return nil
         default:
             return .sha1
         }

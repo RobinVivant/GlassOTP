@@ -39,7 +39,8 @@ struct HotKeyCombo: Codable, Hashable, Sendable {
         if flags.contains(.shift) { carbonMods |= UInt32(shiftKey) }
         if flags.contains(.command) { carbonMods |= UInt32(cmdKey) }
 
-        guard carbonMods != 0 else { return nil }
+        let primaryModifiers = UInt32(controlKey | optionKey | cmdKey)
+        guard (carbonMods & primaryModifiers) != 0 else { return nil }
         return HotKeyCombo(keyCode: UInt32(event.keyCode), modifiers: carbonMods)
     }
 

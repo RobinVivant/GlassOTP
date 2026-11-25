@@ -53,6 +53,15 @@ final class QuickAccessPanelController: NSObject, NSWindowDelegate {
         }
     }
 
+    func runWithSuppressedResign<T>(_ action: () -> T) -> T {
+        suppressNextResignDismiss = true
+        let result = action()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.suppressNextResignDismiss = false
+        }
+        return result
+    }
+
     func dismiss(restorePreviousApp: Bool) {
         panel?.orderOut(nil)
         vault?.clock.setActive(false, reason: "popover")
@@ -93,6 +102,9 @@ final class QuickAccessPanelController: NSObject, NSWindowDelegate {
             vault: vault,
             onDismiss: { [weak self] restoreFocus in
                 self?.dismiss(restorePreviousApp: restoreFocus)
+            },
+            onPickImportURL: { [weak self] panel in
+                self?.runWithSuppressedResign { panel.runModal() == .OK ? panel.url : nil }
             }
         )
         let hostingView = NSHostingView(rootView: rootView)
