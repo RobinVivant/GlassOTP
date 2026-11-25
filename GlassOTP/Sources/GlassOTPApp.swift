@@ -23,9 +23,11 @@ struct GlassOTPApp: App {
                 }
             }
             .task {
+                #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("--demo-seed") {
                     vault.seedDemoDataIfNeeded()
                 }
+                #endif
                 await security.unlockOnLaunchIfNeeded()
             }
             .onOpenURL { url in
