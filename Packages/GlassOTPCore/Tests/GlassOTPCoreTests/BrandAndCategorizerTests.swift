@@ -158,4 +158,104 @@ struct BrandAndCategorizerTests {
         #expect(snapshot.accounts[0].customLogoDomain == nil)
         #expect(BrandCatalog.shared.match(account: snapshot.accounts[0])?.slug == "github")
     }
+
+    @Test("BrandCatalog memoization distinguishes overrides, hits, and misses consistently")
+    func brandCatalogMemoizationConsistency() {
+        let secret = Data("secret".utf8)
+        let missAccount = OTPAccount(issuer: "UnknownInternalPortalXYZ", label: "alice@local", secret: secret)
+        #expect(BrandCatalog.shared.match(account: missAccount) == nil)
+        #expect(BrandCatalog.shared.match(account: missAccount) == nil)
+        #expect(BrandCatalog.shared.inferredDomain(for: missAccount) == nil)
+        #expect(BrandCatalog.shared.inferredDomain(for: missAccount, includeHeuristicFallback: true) == "unknowninternalportalxyz.com")
+
+        let overrideAccount = OTPAccount(
+            issuer: "UnknownInternalPortalXYZ",
+            label: "alice@local",
+            secret: secret,
+            customBrandSlug: "github",
+            customLogoDomain: "override.example.com"
+        )
+        #expect(BrandCatalog.shared.match(account: overrideAccount)?.slug == "github")
+        #expect(BrandCatalog.shared.match(account: overrideAccount)?.slug == "github")
+        #expect(BrandCatalog.shared.inferredDomain(for: overrideAccount) == "override.example.com")
+        #expect(BrandCatalog.shared.match(account: missAccount) == nil)
+    }
+
+    @Test("AccountCategorizer fast suggestion check matches buildPlan results across vault states")
+    func fastSuggestionCheckParity() {
+        let secret = Data("secret".utf8)
+        let defaultFolder = OTPFolder(name: "Accounts", symbolName: "folder.fill", sortOrder: 0)
+        let devFolder = OTPFolder(name: "Dev & Code", symbolName: "chevron.left.forwardslash.chevron.right", sortOrder: 1)
+
+        let ghDefault = OTPAccount(issuer: "GitHub", label: "a", secret: secret, folderID: defaultFolder.id)
+        let cfDefault = OTPAccount(issuer: "Cloudflare", label: "b", secret: secret, folderID: defaultFolder.id)
+        let ghUncat = OTPAccount(issuer: "GitHub", label: "a", secret: secret, folderID: nil)
+        let cfUncat = OTPAccount(issuer: "Cloudflare", label: "b", secret: secret, folderID: nil)
+        let ghDev = OTPAccount(issuer: "GitHub", label: "a", secret: secret, folderID: devFolder.id)
+        let cfDev = OTPAccount(issuer: "Cloudflare", label: "b", secret: secret, folderID: devFolder.id)
+
+        let cases: [(accounts: [OTPAccount], folders: [OTPFolder], expected: Bool)] = [
+            ([ghDefault, cfDefault], [defaultFolder], true),
+            ([ghUncat, cfUncat], [devFolder], true),
+            ([ghUncat, cfDev], [devFolder], false),
+            ([ghDev, cfDev], [devFolder], false),
+            ([ghDefault], [defaultFolder], false),
+        ]
+
+        for testCase in cases {
+            let fast = AccountCategorizer.hasUncategorizedOrDefaultOnly(
+                accounts: testCase.accounts,
+                folders: testCase.folders
+            )
+            let plan = AccountCategorizer.buildPlan(accounts: testCase.accounts, folders: testCase.folders)
+            #expect(fast == testCase.expected)
+            #expect(fast == plan.hasUncategorizedOrDefaultOnly)
+        }
+    }
+
+    @Test("BrandLogoCache negative misses clear cleanly on savePNGData and clearAll")
+    func brandLogoCacheInvalidation() {
+        let domain = "perf-cache-\(UUID().uuidString.lowercased()).example.com"
+        let payload = Data([0x89, 0x50, 0x4E, 0x47, 0x01, 0x02, 0x03, 0x04])
+
+        #expect(BrandLogoCache.hasCachedLogo(forDomain: domain) == false)
+        #expect(BrandLogoCache.loadPNGData(forDomain: domain) == nil)
+
+        BrandLogoCache.savePNGData(payload, forDomain: domain)
+        #expect(BrandLogoCache.hasCachedLogo(forDomain: domain) == true)
+        #expect(BrandLogoCache.loadPNGData(forDomain: domain) == payload)
+
+        BrandLogoCache.clearAll()
+        #expect(BrandLogoCache.hasCachedLogo(forDomain: domain) == false)
+        #expect(BrandLogoCache.loadPNGData(forDomain: domain) == nil)
+    }
+
+    @Test("OTPGenerator.totpTiming and snapshot(includeNextCode: false) match full snapshot")
+    func lightweightTOTPTimingMatchesSnapshot() {
+        let secret = Data("JBSWY3DPEHPK3PXP".utf8)
+        let account = OTPAccount(issuer: "GitHub", label: "robin", secret: secret, period: 30)
+        let testDate = Date(timeIntervalSince1970: 1_700_000_006.25)
+
+        let full = OTPGenerator.snapshot(for: account, at: testDate, includeNextCode: true)
+        let light = OTPGenerator.snapshot(for: account, at: testDate, includeNextCode: false)
+        let timing = OTPGenerator.totpTiming(period: account.period, at: testDate)
+
+        #expect(light.code == full.code)
+        #expect(light.formattedCode == full.formattedCode)
+        #expect(light.nextCode == nil)
+        #expect(light.formattedNextCode == nil)
+        #expect(full.nextCode != nil)
+
+        #expect(abs(timing.remainingSeconds - full.remainingSeconds) < 0.0001)
+        #expect(abs(timing.progress - full.progress) < 0.0001)
+        #expect(abs(timing.remainingSeconds - 3.75) < 0.0001)
+
+        let derivedCode = OTPGenerator.generateHOTP(
+            secret: account.secret,
+            counter: timing.counter,
+            digits: account.digits,
+            algorithm: account.algorithm
+        )
+        #expect(derivedCode == full.code)
+    }
 }

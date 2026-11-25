@@ -150,25 +150,23 @@ struct VaultHomeView: View {
     }
 
     private var populatedVaultView: some View {
-        TimelineView(.periodic(from: .now, by: 0.25)) { context in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    if !vault.folders.isEmpty {
-                        folderFilterBar
-                    }
-
-                    if vault.shouldSuggestAutoCategorize {
-                        autoCategorizeBanner
-                    }
-
-                    if vault.selectedFolderID == nil && !vault.pinnedAccounts.isEmpty {
-                        pinnedSection(date: context.date)
-                    }
-
-                    accountsSection(date: context.date)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 18) {
+                if !vault.folders.isEmpty {
+                    folderFilterBar
                 }
-                .padding(.vertical, 10)
+
+                if vault.shouldSuggestAutoCategorize {
+                    autoCategorizeBanner
+                }
+
+                if vault.selectedFolderID == nil && !vault.pinnedAccounts.isEmpty {
+                    pinnedSection
+                }
+
+                accountsSection
             }
+            .padding(.vertical, 10)
         }
     }
 
@@ -264,7 +262,7 @@ struct VaultHomeView: View {
         .buttonStyle(.plain)
     }
 
-    private func pinnedSection(date: Date) -> some View {
+    private var pinnedSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("PINNED")
                 .font(.caption.weight(.bold))
@@ -274,7 +272,7 @@ struct VaultHomeView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(vault.pinnedAccounts) { account in
-                        PinnedOTPCardView(account: account, date: date)
+                        PinnedOTPCardView(account: account)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -282,7 +280,7 @@ struct VaultHomeView: View {
         }
     }
 
-    private func accountsSection(date: Date) -> some View {
+    private var accountsSection: some View {
         let displayed = vault.filteredAccounts
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -308,8 +306,7 @@ struct VaultHomeView: View {
                     ForEach(displayed) { account in
                         OTPCardView(
                             account: account,
-                            folderName: vault.selectedFolderID == nil ? vault.folderName(for: account.folderID) : nil,
-                            date: date
+                            folderName: vault.selectedFolderID == nil ? vault.folderName(for: account.folderID) : nil
                         )
                     }
                 }

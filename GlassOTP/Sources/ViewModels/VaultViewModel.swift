@@ -21,8 +21,14 @@ struct PendingImportFile: Identifiable {
 @MainActor
 @Observable
 final class VaultViewModel {
-    var folders: [OTPFolder] = []
-    var accounts: [OTPAccount] = []
+    var folders: [OTPFolder] = [] {
+        didSet { rebuildFolderLookup() }
+    }
+    var accounts: [OTPAccount] = [] {
+        didSet { rebuildPinnedAccounts() }
+    }
+    private(set) var pinnedAccounts: [OTPAccount] = []
+    @ObservationIgnored private var folderNamesByID: [UUID: String] = [:]
     var selectedFolderID: UUID?
     var searchText: String = ""
 
@@ -73,13 +79,17 @@ final class VaultViewModel {
         reloadFromStore()
     }
 
-    var shouldSuggestAutoCategorize: Bool {
-        guard !accounts.isEmpty, !dismissedAutoCategorizeBanner else { return false }
-        return AccountCategorizer.buildPlan(accounts: accounts, folders: folders).hasUncategorizedOrDefaultOnly
+    private func rebuildFolderLookup() {
+        folderNamesByID = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0.name) })
     }
 
-    var pinnedAccounts: [OTPAccount] {
-        accounts.filter(\.isPinned)
+    private func rebuildPinnedAccounts() {
+        pinnedAccounts = accounts.filter(\.isPinned)
+    }
+
+    var shouldSuggestAutoCategorize: Bool {
+        guard !accounts.isEmpty, !dismissedAutoCategorizeBanner else { return false }
+        return AccountCategorizer.hasUncategorizedOrDefaultOnly(accounts: accounts, folders: folders)
     }
 
     var filteredAccounts: [OTPAccount] {
@@ -104,8 +114,7 @@ final class VaultViewModel {
     }
 
     func folderName(for id: UUID?) -> String? {
-        guard let id else { return nil }
-        return folders.first(where: { $0.id == id })?.name
+        id.flatMap { folderNamesByID[$0] }
     }
 
     func accountsCount(in folderID: UUID) -> Int {

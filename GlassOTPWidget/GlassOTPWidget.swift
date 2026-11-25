@@ -467,9 +467,11 @@ private struct WidgetBrandBadge: View {
 
     var body: some View {
         let matchedBrand = item.brandSlug.flatMap { BrandCatalog.shared.brand(slug: $0) }
-        let cachedPNG: UIImage? = item.cachedLogoDomain
-            .flatMap { BrandLogoCache.loadPNGData(forDomain: $0) }
-            .flatMap { UIImage(data: $0) }
+        let cachedPNG: UIImage? = matchedBrand?.svgPath == nil
+            ? item.cachedLogoDomain
+                .flatMap { BrandLogoCache.loadPNGData(forDomain: $0) }
+                .flatMap { UIImage(data: $0) }
+            : nil
         let cornerRadius = size * 0.28
 
         ZStack {
@@ -508,9 +510,9 @@ private struct WidgetBrandBadge: View {
 
     private func widgetColor(_ hex: String) -> Color {
         let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: cleaned).scanHexInt64(&int)
-        guard cleaned.count == 6 else { return Color.accentColor }
+        guard cleaned.count == 6, let int = UInt64(cleaned, radix: 16) else {
+            return Color.accentColor
+        }
         return Color(
             .sRGB,
             red: Double((int >> 16) & 0xFF) / 255.0,

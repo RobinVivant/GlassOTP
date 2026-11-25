@@ -4,31 +4,21 @@ import SwiftUI
 struct PinnedOTPCardView: View {
     @Environment(VaultViewModel.self) private var vault
     let account: OTPAccount
-    let date: Date
 
     var body: some View {
-        let snapshot = OTPGenerator.snapshot(for: account, at: date)
         let isVisible = vault.isCodeVisible(for: account.id)
-        let brand = account.brandStyle
+        let accentHex = BrandCatalog.shared.match(account: account).map { "#\($0.effectiveAccentHex)" }
+            ?? account.brandStyle.accentHex
 
         Button {
-            vault.copyCode(for: account, at: date)
+            vault.copyCode(for: account)
         } label: {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     BrandAvatarView(account: account, size: 32, logoRevision: vault.logoCacheRevision)
+                        .equatable()
                     Spacer()
-                    if account.type == .totp {
-                        CountdownRingView(
-                            remainingSeconds: snapshot.remainingSeconds,
-                            progress: snapshot.progress,
-                            size: 28
-                        )
-                    } else {
-                        Image(systemName: "number.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
+                    PinnedOTPLiveRingView(account: account)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -43,17 +33,7 @@ struct PinnedOTPCardView: View {
                     }
                 }
 
-                Text(isVisible ? snapshot.formattedCode : "••• •••")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .contentTransition(.numericText())
-                    .foregroundStyle(
-                        account.type == .totp && snapshot.remainingSeconds <= 5
-                            ? Color.red
-                            : Color.primary
-                    )
+                OTPLiveCodeText(account: account, fontSize: 22, isVisible: isVisible)
             }
             .padding(14)
             .frame(width: 170, alignment: .leading)
@@ -62,7 +42,7 @@ struct PinnedOTPCardView: View {
                     .fill(.ultraThinMaterial)
                     .overlay(
                         LinearGradient(
-                            colors: [Color(hex: brand.accentHex).opacity(0.16), .clear],
+                            colors: [Color(hex: accentHex).opacity(0.16), .clear],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -82,15 +62,13 @@ struct OTPCardView: View {
     @Environment(VaultViewModel.self) private var vault
     let account: OTPAccount
     let folderName: String?
-    let date: Date
 
     var body: some View {
-        let snapshot = OTPGenerator.snapshot(for: account, at: date)
         let isVisible = vault.isCodeVisible(for: account.id)
-        let isExpiring = account.type == .totp && snapshot.remainingSeconds <= 5
 
         HStack(spacing: 14) {
             BrandAvatarView(account: account, size: 46, logoRevision: vault.logoCacheRevision)
+                .equatable()
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -122,42 +100,38 @@ struct OTPCardView: View {
                         .lineLimit(1)
                 }
 
-                Text(isVisible ? snapshot.formattedCode : "••• •••")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .contentTransition(.numericText())
-                    .foregroundStyle(isExpiring ? Color.red : Color.primary)
+                OTPLiveCodeText(account: account, fontSize: 28, isVisible: isVisible)
             }
 
             Spacer(minLength: 8)
 
-            trailingControl(snapshot: snapshot, isVisible: isVisible, isExpiring: isExpiring)
+            OTPLiveTrailingControl(
+                account: account,
+                isVisible: isVisible,
+                hideCodesInApp: vault.hideCodesInApp,
+                onIncrementHOTP: { vault.incrementHOTP(for: account) },
+                onToggleReveal: { vault.toggleReveal(for: account.id) }
+            )
         }
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(.ultraThinMaterial)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(
-                    isExpiring ? Color.red.opacity(0.35) : Color.white.opacity(0.14),
-                    lineWidth: 1
-                )
-        )
+        .overlay {
+            OTPExpiringBorderOverlay(account: account, cornerRadius: 22)
+        }
         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .onTapGesture {
             if vault.hideCodesInApp && !vault.revealedAccountIDs.contains(account.id) {
                 vault.toggleReveal(for: account.id)
             } else {
-                vault.copyCode(for: account, at: date)
+                vault.copyCode(for: account)
             }
         }
         .contextMenu {
             Button {
-                vault.copyCode(for: account, at: date)
+                vault.copyCode(for: account)
             } label: {
                 Label("Copy Code", systemImage: "doc.on.doc")
             }
@@ -212,30 +186,120 @@ struct OTPCardView: View {
             }
         }
     }
+}
 
-    @ViewBuilder
-    private func trailingControl(snapshot: OTPCodeSnapshot, isVisible: Bool, isExpiring: Bool) -> some View {
+private struct PinnedOTPLiveRingView: View {
+    @Environment(OTPClock.self) private var clock
+    let account: OTPAccount
+
+    var body: some View {
+        if account.type == .totp {
+            let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
+            CountdownRingView(
+                remainingSeconds: timing.remainingSeconds,
+                progress: timing.progress,
+                size: 28,
+                period: timing.period
+            )
+        } else {
+            Image(systemName: "number.circle.fill")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct OTPLiveCodeText: View {
+    @Environment(OTPClock.self) private var clock
+    let account: OTPAccount
+    let fontSize: CGFloat
+    let isVisible: Bool
+
+    var body: some View {
+        let isExpiring: Bool
+        let displayedText: String
+
+        if account.type == .totp {
+            let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
+            isExpiring = timing.remainingSeconds <= 5
+            if isVisible {
+                let code = OTPGenerator.generateHOTP(
+                    secret: account.secret,
+                    counter: timing.counter,
+                    digits: account.digits,
+                    algorithm: account.algorithm
+                )
+                displayedText = OTPGenerator.formatCode(code)
+            } else {
+                displayedText = "••• •••"
+            }
+        } else {
+            isExpiring = false
+            if isVisible {
+                displayedText = OTPGenerator.snapshot(
+                    for: account,
+                    at: Date(),
+                    includeNextCode: false
+                ).formattedCode
+            } else {
+                displayedText = "••• •••"
+            }
+        }
+
+        return Text(displayedText)
+            .font(.system(size: fontSize, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .contentTransition(.numericText())
+            .foregroundStyle(isExpiring ? Color.red : Color.primary)
+    }
+}
+
+private struct OTPLiveTrailingControl: View {
+    @Environment(OTPClock.self) private var clock
+    let account: OTPAccount
+    let isVisible: Bool
+    let hideCodesInApp: Bool
+    let onIncrementHOTP: () -> Void
+    let onToggleReveal: () -> Void
+
+    var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
             if account.type == .totp {
+                let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
+                let isExpiring = timing.remainingSeconds <= 5
+
                 CountdownRingView(
-                    remainingSeconds: snapshot.remainingSeconds,
-                    progress: snapshot.progress,
-                    size: 36
+                    remainingSeconds: timing.remainingSeconds,
+                    progress: timing.progress,
+                    size: 36,
+                    period: timing.period
                 )
 
-                if let next = snapshot.formattedNextCode {
-                    Text("→ \(next)")
-                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .foregroundStyle(.secondary)
-                        .opacity(isVisible && isExpiring ? 1 : 0)
-                }
+                let nextText: String = {
+                    guard isVisible, isExpiring else {
+                        return account.digits == 8 ? "0000 0000" : "000 000"
+                    }
+                    let next = OTPGenerator.generateHOTP(
+                        secret: account.secret,
+                        counter: timing.counter &+ 1,
+                        digits: account.digits,
+                        algorithm: account.algorithm
+                    )
+                    return OTPGenerator.formatCode(next)
+                }()
+
+                Text("→ \(nextText)")
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .foregroundStyle(.secondary)
+                    .opacity(isVisible && isExpiring ? 1 : 0)
+                    .accessibilityHidden(!(isVisible && isExpiring))
             } else {
-                Button {
-                    vault.incrementHOTP(for: account)
-                } label: {
+                Button(action: onIncrementHOTP) {
                     Image(systemName: "arrow.clockwise")
                         .font(.subheadline.weight(.semibold))
                         .frame(width: 34, height: 34)
@@ -244,10 +308,8 @@ struct OTPCardView: View {
                 .accessibilityLabel("Next HOTP Counter")
             }
 
-            if vault.hideCodesInApp {
-                Button {
-                    vault.toggleReveal(for: account.id)
-                } label: {
+            if hideCodesInApp {
+                Button(action: onToggleReveal) {
                     Image(systemName: isVisible ? "eye.slash" : "eye")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -256,5 +318,21 @@ struct OTPCardView: View {
             }
         }
         .frame(minWidth: 58, alignment: .trailing)
+    }
+}
+
+private struct OTPExpiringBorderOverlay: View {
+    @Environment(OTPClock.self) private var clock
+    let account: OTPAccount
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        let isExpiring = account.type == .totp
+            && OTPGenerator.totpTiming(period: account.period, at: clock.now).remainingSeconds <= 5
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .strokeBorder(
+                isExpiring ? Color.red.opacity(0.35) : Color.white.opacity(0.14),
+                lineWidth: 1
+            )
     }
 }

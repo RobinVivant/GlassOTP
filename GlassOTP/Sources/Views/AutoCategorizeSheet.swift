@@ -5,18 +5,15 @@ struct AutoCategorizeSheet: View {
     @Environment(VaultViewModel.self) private var vault
     @Environment(\.dismiss) private var dismiss
 
+    @State private var plan: CategorizationPlan?
     @State private var assignments: [UUID: OTPCategory] = [:]
     @State private var selectedIDs: Set<UUID> = []
     @State private var fetchWebLogos = true
     @State private var removeEmptyDefaultFolder = true
     @State private var isApplying = false
-    @State private var hasDefaultAccountsFolder = false
-
-    private var plan: CategorizationPlan {
-        AccountCategorizer.buildPlan(accounts: vault.accounts, folders: vault.folders)
-    }
 
     private var groupedCategories: [(category: OTPCategory, items: [CategorizationItem])] {
+        guard let plan else { return [] }
         let grouped = Dictionary(grouping: plan.items) { item in
             assignments[item.id] ?? item.category
         }
@@ -27,11 +24,15 @@ struct AutoCategorizeSheet: View {
     }
 
     private var matchedVectorCount: Int {
-        plan.items.filter { $0.matchedBrand?.svgPath != nil }.count
+        plan?.items.filter { $0.matchedBrand?.svgPath != nil }.count ?? 0
     }
 
     private var webFetchCandidateCount: Int {
-        plan.items.filter { $0.matchedBrand?.svgPath == nil && $0.inferredLogoDomain != nil }.count
+        plan?.items.filter { $0.matchedBrand?.svgPath == nil && $0.inferredLogoDomain != nil }.count ?? 0
+    }
+
+    private var hasDefaultAccountsFolder: Bool {
+        plan?.defaultAccountsFolderID != nil
     }
 
     var body: some View {
@@ -40,7 +41,7 @@ struct AutoCategorizeSheet: View {
                 AmbientGlassBackground()
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
+                    LazyVStack(alignment: .leading, spacing: 18) {
                         summaryCard
 
                         ForEach(groupedCategories, id: \.category) { group in
@@ -58,10 +59,12 @@ struct AutoCategorizeSheet: View {
                 }
             }
             .onAppear {
-                let built = plan
-                hasDefaultAccountsFolder = built.defaultAccountsFolderID != nil
-                assignments = Dictionary(uniqueKeysWithValues: built.items.map { ($0.id, $0.category) })
-                selectedIDs = Set(built.items.map(\.id))
+                if plan == nil {
+                    let built = AccountCategorizer.buildPlan(accounts: vault.accounts, folders: vault.folders)
+                    plan = built
+                    assignments = Dictionary(uniqueKeysWithValues: built.items.map { ($0.id, $0.category) })
+                    selectedIDs = Set(built.items.map(\.id))
+                }
             }
         }
     }
@@ -134,7 +137,7 @@ struct AutoCategorizeSheet: View {
             }
             .padding(.horizontal, 4)
 
-            VStack(spacing: 8) {
+            LazyVStack(spacing: 8) {
                 ForEach(items) { item in
                     let isSelected = selectedIDs.contains(item.id)
                     HStack(spacing: 12) {
@@ -156,6 +159,7 @@ struct AutoCategorizeSheet: View {
                             size: 38,
                             logoRevision: vault.logoCacheRevision
                         )
+                        .equatable()
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.account.displayTitle)

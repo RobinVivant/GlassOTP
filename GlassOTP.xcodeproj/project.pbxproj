@@ -10,6 +10,7 @@
 		00351B365E1744A66F71B2F3 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BCA40793082F5FF0338C65B /* DesignSystem.swift */; };
 		02A054D4DE3F50DD6C31776D /* BrandLogoFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2C7120C917145D21689E820 /* BrandLogoFetcher.swift */; };
 		28B42BF711499C5575132465 /* OTPCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C40D0314FC4881D1AC573F6E /* OTPCardView.swift */; };
+		4EF961A6DFCE991A82080072 /* OTPClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87EC3A01DF1B5DA769A83B1 /* OTPClock.swift */; };
 		5A7910CEA36108A34B4C7711 /* OTPWidgetIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E162C1B68F1B0706930909D6 /* OTPWidgetIntents.swift */; };
 		6A712E074B7DE9A273F64DDC /* VaultHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BA990EBAB0B5EBFF445AAC5 /* VaultHomeView.swift */; };
 		72027D67D8CBD6D3030FF5D8 /* FoldersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B832CCF85C60E594B0F9FD67 /* FoldersView.swift */; };
@@ -81,6 +82,7 @@
 		C40D0314FC4881D1AC573F6E /* OTPCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPCardView.swift; sourceTree = "<group>"; };
 		E162C1B68F1B0706930909D6 /* OTPWidgetIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPWidgetIntents.swift; sourceTree = "<group>"; };
 		E6A2C7A2A67CD84D3A28B2DF /* GlassOTP.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GlassOTP.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E87EC3A01DF1B5DA769A83B1 /* OTPClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OTPClock.swift; sourceTree = "<group>"; };
 		F425EC8855D595BBC6353076 /* AutoCategorizeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoCategorizeSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -157,6 +159,7 @@
 			children = (
 				7A2FBF4498DD3D22125408AC /* BiometricLockManager.swift */,
 				A2C7120C917145D21689E820 /* BrandLogoFetcher.swift */,
+				E87EC3A01DF1B5DA769A83B1 /* OTPClock.swift */,
 				579D811F9A923199785B8048 /* VaultViewModel.swift */,
 			);
 			path = ViewModels;
@@ -307,6 +310,7 @@
 				F5F8C82244B91194F092CD61 /* GlassOTPApp.swift in Sources */,
 				A546BC2E54BED5D2828845B8 /* OTPAuthImportSheet.swift in Sources */,
 				28B42BF711499C5575132465 /* OTPCardView.swift in Sources */,
+				4EF961A6DFCE991A82080072 /* OTPClock.swift in Sources */,
 				F52E42B801126068939632FD /* QRScannerSheet.swift in Sources */,
 				E01279E81EE0B05DADCBA3D2 /* RootTabView.swift in Sources */,
 				F3D8CE57EBB614D72234A638 /* SettingsView.swift in Sources */,

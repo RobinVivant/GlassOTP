@@ -32,7 +32,37 @@ public struct OTPCodeSnapshot: Equatable, Sendable {
     }
 }
 
+public struct TOTPTiming: Equatable, Sendable {
+    public let counter: UInt64
+    public let period: TimeInterval
+    public let remainingSeconds: TimeInterval
+    public let progress: Double
+
+    public init(counter: UInt64, period: TimeInterval, remainingSeconds: TimeInterval, progress: Double) {
+        self.counter = counter
+        self.period = period
+        self.remainingSeconds = remainingSeconds
+        self.progress = progress
+    }
+}
+
 public enum OTPGenerator {
+    public static func totpTiming(period: Int, at date: Date = Date()) -> TOTPTiming {
+        let safePeriod = period > 0 ? period : 30
+        let periodDouble = TimeInterval(safePeriod)
+        let timestamp = max(0, date.timeIntervalSince1970)
+        let step = floor(timestamp / periodDouble)
+        let endTimestamp = (step + 1) * periodDouble
+        let remaining = max(0, endTimestamp - timestamp)
+        let progress = min(1, max(0, remaining / periodDouble))
+        return TOTPTiming(
+            counter: UInt64(step),
+            period: periodDouble,
+            remainingSeconds: remaining,
+            progress: progress
+        )
+    }
+
     public static func generateHOTP(
         secret: Data,
         counter: UInt64,
@@ -77,7 +107,11 @@ public enum OTPGenerator {
         return generateHOTP(secret: secret, counter: counter, digits: digits, algorithm: algorithm)
     }
 
-    public static func snapshot(for account: OTPAccount, at date: Date = Date()) -> OTPCodeSnapshot {
+    public static func snapshot(
+        for account: OTPAccount,
+        at date: Date = Date(),
+        includeNextCode: Bool = true
+    ) -> OTPCodeSnapshot {
         let normalizedDigits = (4...10).contains(account.digits) ? account.digits : 6
         switch account.type {
         case .hotp:
@@ -87,17 +121,19 @@ public enum OTPGenerator {
                 digits: normalizedDigits,
                 algorithm: account.algorithm
             )
-            let next = generateHOTP(
-                secret: account.secret,
-                counter: account.counter &+ 1,
-                digits: normalizedDigits,
-                algorithm: account.algorithm
-            )
+            let next = includeNextCode
+                ? generateHOTP(
+                    secret: account.secret,
+                    counter: account.counter &+ 1,
+                    digits: normalizedDigits,
+                    algorithm: account.algorithm
+                )
+                : nil
             return OTPCodeSnapshot(
                 code: code,
                 formattedCode: formatCode(code),
                 nextCode: next,
-                formattedNextCode: formatCode(next),
+                formattedNextCode: next.map(formatCode),
                 periodStart: date,
                 periodEnd: date,
                 remainingSeconds: 0,
@@ -121,18 +157,20 @@ public enum OTPGenerator {
                 digits: normalizedDigits,
                 algorithm: account.algorithm
             )
-            let nextCode = generateHOTP(
-                secret: account.secret,
-                counter: counter &+ 1,
-                digits: normalizedDigits,
-                algorithm: account.algorithm
-            )
+            let nextCode = includeNextCode
+                ? generateHOTP(
+                    secret: account.secret,
+                    counter: counter &+ 1,
+                    digits: normalizedDigits,
+                    algorithm: account.algorithm
+                )
+                : nil
 
             return OTPCodeSnapshot(
                 code: code,
                 formattedCode: formatCode(code),
                 nextCode: nextCode,
-                formattedNextCode: formatCode(nextCode),
+                formattedNextCode: nextCode.map(formatCode),
                 periodStart: Date(timeIntervalSince1970: startTimestamp),
                 periodEnd: Date(timeIntervalSince1970: endTimestamp),
                 remainingSeconds: remaining,

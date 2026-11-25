@@ -6,6 +6,7 @@ struct GlassOTPApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var vault = VaultViewModel()
     @State private var security = BiometricLockManager()
+    @State private var clock = OTPClock()
 
     var body: some Scene {
         WindowGroup {
@@ -13,6 +14,7 @@ struct GlassOTPApp: App {
                 RootTabView()
                     .environment(vault)
                     .environment(security)
+                    .environment(clock)
                     .blur(radius: shouldBlurContent ? 18 : 0)
                     .animation(.easeOut(duration: 0.2), value: shouldBlurContent)
 
@@ -34,6 +36,7 @@ struct GlassOTPApp: App {
                 vault.handleIncomingURL(url)
             }
             .onChange(of: scenePhase) { _, newPhase in
+                clock.setActive(newPhase == .active)
                 security.handleScenePhaseChange(newPhase)
             }
         }

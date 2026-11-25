@@ -123,24 +123,21 @@ private struct SearchVaultView: View {
         ZStack {
             AmbientGlassBackground()
 
-            TimelineView(.periodic(from: .now, by: 0.25)) { context in
-                let results = vault.searchResults(for: query)
-                if results.isEmpty {
-                    ContentUnavailableView.search(text: query)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            ForEach(results) { account in
-                                OTPCardView(
-                                    account: account,
-                                    folderName: vault.folderName(for: account.folderID),
-                                    date: context.date
-                                )
-                            }
+            let results = vault.searchResults(for: query)
+            if results.isEmpty {
+                ContentUnavailableView.search(text: query)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(results) { account in
+                            OTPCardView(
+                                account: account,
+                                folderName: vault.folderName(for: account.folderID)
+                            )
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
                 }
             }
         }

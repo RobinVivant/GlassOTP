@@ -79,9 +79,9 @@ public struct BrandDefinition: Codable, Hashable, Sendable, Identifiable {
 
     private static func rgbComponents(from hex: String) -> (r: Double, g: Double, b: Double) {
         let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: cleaned).scanHexInt64(&int)
-        guard cleaned.count == 6 else { return (0.22, 0.74, 0.97) }
+        guard cleaned.count == 6, let int = UInt64(cleaned, radix: 16) else {
+            return (0.22, 0.74, 0.97)
+        }
         return (
             Double((int >> 16) & 0xFF) / 255.0,
             Double((int >> 8) & 0xFF) / 255.0,
@@ -98,11 +98,68 @@ public struct BrandDefinition: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+private struct IndexedBrand: Sendable {
+    let brand: BrandDefinition
+    let normalizedAliases: [String]
+}
+
+private enum CachedValue<T: Sendable>: Sendable {
+    case hit(T)
+    case miss
+
+    var optionalValue: T? {
+        switch self {
+        case .hit(let value): value
+        case .miss: nil
+        }
+    }
+}
+
+private final class MatchCacheStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var matchByKey: [String: CachedValue<BrandDefinition>] = [:]
+    private var domainByKey: [String: CachedValue<String>] = [:]
+    private let maxEntries = 2048
+
+    func match(forKey key: String) -> BrandDefinition?? {
+        lock.withLock {
+            matchByKey[key].map(\.optionalValue)
+        }
+    }
+
+    func setMatch(_ value: BrandDefinition?, forKey key: String) {
+        lock.withLock {
+            if matchByKey.count >= maxEntries {
+                matchByKey.removeAll(keepingCapacity: true)
+            }
+            matchByKey[key] = value.map(CachedValue.hit) ?? .miss
+        }
+    }
+
+    func domain(forKey key: String) -> String?? {
+        lock.withLock {
+            domainByKey[key].map(\.optionalValue)
+        }
+    }
+
+    func setDomain(_ value: String?, forKey key: String) {
+        lock.withLock {
+            if domainByKey.count >= maxEntries {
+                domainByKey.removeAll(keepingCapacity: true)
+            }
+            domainByKey[key] = value.map(CachedValue.hit) ?? .miss
+        }
+    }
+}
+
 public final class BrandCatalog: Sendable {
     public static let shared = BrandCatalog()
 
     private let brands: [BrandDefinition]
     private let bySlug: [String: BrandDefinition]
+    private let indexedBrands: [IndexedBrand]
+    private let exactAliasMap: [String: BrandDefinition]
+    private let cache = MatchCacheStore()
 
     private static let consumerEmailDomains: Set<String> = [
         "gmail.com", "googlemail.com", "icloud.com", "me.com", "mac.com",
@@ -118,9 +175,43 @@ public final class BrandCatalog: Sendable {
            let decoded = try? JSONDecoder().decode([BrandDefinition].self, from: data) {
             self.brands = decoded
             self.bySlug = Dictionary(uniqueKeysWithValues: decoded.map { ($0.slug, $0) })
+
+            var indexed: [IndexedBrand] = []
+            indexed.reserveCapacity(decoded.count)
+            var exactMap: [String: BrandDefinition] = [:]
+            exactMap.reserveCapacity(decoded.count * 3)
+
+            for brand in decoded {
+                var rawCandidates: [String] = [brand.title, brand.slug]
+                if !brand.domain.isEmpty {
+                    rawCandidates.append(brand.domain)
+                }
+                rawCandidates.append(contentsOf: brand.aliases)
+
+                var seenAliases = Set<String>()
+                var normAliases: [String] = []
+                normAliases.reserveCapacity(rawCandidates.count)
+
+                for candidate in rawCandidates {
+                    let norm = Self.normalizeText(candidate)
+                    guard !norm.isEmpty else { continue }
+                    if seenAliases.insert(norm).inserted {
+                        normAliases.append(norm)
+                    }
+                    if exactMap[norm] == nil {
+                        exactMap[norm] = brand
+                    }
+                }
+                indexed.append(IndexedBrand(brand: brand, normalizedAliases: normAliases))
+            }
+
+            self.indexedBrands = indexed
+            self.exactAliasMap = exactMap
         } else {
             self.brands = []
             self.bySlug = [:]
+            self.indexedBrands = []
+            self.exactAliasMap = [:]
         }
     }
 
@@ -145,6 +236,16 @@ public final class BrandCatalog: Sendable {
     }
 
     public func match(account: OTPAccount) -> BrandDefinition? {
+        let cacheKey = "\(account.customBrandSlug ?? "")\u{1F}\(account.issuer)\u{1F}\(account.label)"
+        if let cached = cache.match(forKey: cacheKey) {
+            return cached
+        }
+        let resolved = computeMatch(account: account)
+        cache.setMatch(resolved, forKey: cacheKey)
+        return resolved
+    }
+
+    private func computeMatch(account: OTPAccount) -> BrandDefinition? {
         if let customSlug = account.customBrandSlug?.lowercased(),
            let explicit = bySlug[customSlug] {
             return explicit
@@ -179,6 +280,16 @@ public final class BrandCatalog: Sendable {
     }
 
     public func inferredDomain(for account: OTPAccount, includeHeuristicFallback: Bool = false) -> String? {
+        let cacheKey = "\(includeHeuristicFallback ? "1" : "0")\u{1F}\(account.customLogoDomain ?? "")\u{1F}\(account.customBrandSlug ?? "")\u{1F}\(account.issuer)\u{1F}\(account.label)"
+        if let cached = cache.domain(forKey: cacheKey) {
+            return cached
+        }
+        let resolved = computeInferredDomain(for: account, includeHeuristicFallback: includeHeuristicFallback)
+        cache.setDomain(resolved, forKey: cacheKey)
+        return resolved
+    }
+
+    private func computeInferredDomain(for account: OTPAccount, includeHeuristicFallback: Bool) -> String? {
         if let custom = Self.cleanedDomain(account.customLogoDomain) {
             return custom
         }
@@ -211,23 +322,22 @@ public final class BrandCatalog: Sendable {
     private func bestMatch(in rawText: String) -> BrandDefinition? {
         let normalized = Self.normalizeText(rawText)
         guard !normalized.isEmpty else { return nil }
+
+        if let exact = exactAliasMap[normalized] {
+            return exact
+        }
+
         let tokens = Set(normalized.split { !$0.isLetter && !$0.isNumber }.map(String.init))
 
         var bestBrand: BrandDefinition?
         var bestScore = 0
 
-        for brand in brands {
-            var candidates: [String] = [brand.title.lowercased(), brand.slug]
-            if !brand.domain.isEmpty {
-                candidates.append(brand.domain.lowercased())
-            }
-            candidates.append(contentsOf: brand.aliases)
-
-            for alias in candidates where !alias.isEmpty {
-                let score = matchScore(alias: alias, normalized: normalized, tokens: tokens)
+        for entry in indexedBrands {
+            for normAlias in entry.normalizedAliases {
+                let score = matchScore(normalizedAlias: normAlias, normalized: normalized, tokens: tokens)
                 if score > bestScore {
                     bestScore = score
-                    bestBrand = brand
+                    bestBrand = entry.brand
                 }
             }
         }
@@ -235,10 +345,7 @@ public final class BrandCatalog: Sendable {
         return bestBrand
     }
 
-    private func matchScore(alias: String, normalized: String, tokens: Set<String>) -> Int {
-        let normAlias = Self.normalizeText(alias)
-        guard !normAlias.isEmpty else { return 0 }
-
+    private func matchScore(normalizedAlias normAlias: String, normalized: String, tokens: Set<String>) -> Int {
         if normalized == normAlias {
             return 10_000 + normAlias.count
         }

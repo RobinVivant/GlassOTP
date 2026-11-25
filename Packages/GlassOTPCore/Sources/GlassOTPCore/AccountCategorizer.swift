@@ -44,8 +44,24 @@ public struct CategorizationPlan: Sendable {
 }
 
 public enum AccountCategorizer {
+    public static func hasUncategorizedOrDefaultOnly(accounts: [OTPAccount], folders: [OTPFolder]) -> Bool {
+        let defaultAccountsFolder = folders.first {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare("Accounts") == .orderedSame
+        }
+        let uncategorizedCount = accounts.reduce(into: 0) { count, account in
+            if account.folderID == nil { count += 1 }
+        }
+        let onlyDefaultFolder = folders.count == 1 && defaultAccountsFolder != nil
+        return uncategorizedCount >= 2 || (onlyDefaultFolder && accounts.count >= 2)
+    }
+
     public static func categorize(account: OTPAccount) -> OTPCategory {
-        if let brand = BrandCatalog.shared.match(account: account) {
+        categorize(account: account, matchedBrand: BrandCatalog.shared.match(account: account))
+    }
+
+    private static func categorize(account: OTPAccount, matchedBrand: BrandDefinition?) -> OTPCategory {
+        if let brand = matchedBrand {
             return brand.category
         }
 
@@ -75,7 +91,7 @@ public enum AccountCategorizer {
         let folderLookup = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0.name) })
         let items = accounts.map { account in
             let brand = BrandCatalog.shared.match(account: account)
-            let category = categorize(account: account)
+            let category = categorize(account: account, matchedBrand: brand)
             let domain = BrandCatalog.shared.inferredDomain(for: account, includeHeuristicFallback: true)
             return CategorizationItem(
                 account: account,
@@ -99,14 +115,11 @@ public enum AccountCategorizer {
             $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 .caseInsensitiveCompare("Accounts") == .orderedSame
         }
-        let uncategorizedCount = accounts.filter { $0.folderID == nil }.count
-        let onlyDefaultFolder = folders.count == 1 && defaultAccountsFolder != nil
-        let hasUncategorizedOrDefaultOnly = uncategorizedCount >= 2 || (onlyDefaultFolder && accounts.count >= 2)
 
         return CategorizationPlan(
             items: items,
             categoryCounts: sortedCounts,
-            hasUncategorizedOrDefaultOnly: hasUncategorizedOrDefaultOnly,
+            hasUncategorizedOrDefaultOnly: hasUncategorizedOrDefaultOnly(accounts: accounts, folders: folders),
             defaultAccountsFolderID: defaultAccountsFolder?.id
         )
     }

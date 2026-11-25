@@ -22,6 +22,7 @@ struct AccountQRDetailSheet: View {
                 VStack(spacing: 20) {
                     VStack(spacing: 14) {
                         BrandAvatarView(account: account, size: 52, logoRevision: 0)
+                            .equatable()
                         Text(account.displayTitle)
                             .font(.title3.bold())
                         if !account.displaySubtitle.isEmpty {

@@ -147,7 +147,7 @@ struct BrandPickerSheet: View {
                         VStack(spacing: 8) {
                             BrandBadgeContent(
                                 brand: brand,
-                                fallbackStyle: account.brandStyle,
+                                fallbackStyle: brand.svgPath == nil ? account.brandStyle : nil,
                                 cachedDomain: brand.svgPath == nil ? brand.domain : nil,
                                 size: 46,
                                 logoRevision: vault.logoCacheRevision

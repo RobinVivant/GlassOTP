@@ -19,6 +19,7 @@ struct OTPAuthImportSheet: View {
     @State private var decryptedFolders: [OTPFolder] = []
     @State private var decryptedAccounts: [OTPAccount] = []
     @State private var selectedAccountIDs: Set<UUID> = []
+    @State private var existingFingerprints: Set<String> = []
     @State private var skipDuplicates = true
 
     private var allowedImportTypes: [UTType] {
@@ -224,7 +225,7 @@ struct OTPAuthImportSheet: View {
     }
 
     private var reviewStepView: some View {
-        let existing = vault.existingFingerprints()
+        let existing = existingFingerprints
         let selectedAccounts = decryptedAccounts.filter { selectedAccountIDs.contains($0.id) }
         let duplicateCount = selectedAccounts.filter { existing.contains($0.fingerprint) }.count
         let finalImportCount = skipDuplicates ? (selectedAccounts.count - duplicateCount) : selectedAccounts.count
@@ -291,7 +292,7 @@ struct OTPAuthImportSheet: View {
             .padding(18)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
-            VStack(spacing: 10) {
+            LazyVStack(spacing: 10) {
                 ForEach(decryptedAccounts) { account in
                     let isDuplicate = existing.contains(account.fingerprint)
                     let isSelected = selectedAccountIDs.contains(account.id)
@@ -308,6 +309,7 @@ struct OTPAuthImportSheet: View {
                                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
 
                             BrandAvatarView(account: account, size: 38, logoRevision: vault.logoCacheRevision)
+                                .equatable()
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(account.displayTitle)
@@ -388,6 +390,7 @@ struct OTPAuthImportSheet: View {
                 decryptedFolders = result.folders
                 decryptedAccounts = result.accounts
                 selectedAccountIDs = Set(result.accounts.map(\.id))
+                existingFingerprints = vault.existingFingerprints()
                 isDecrypting = false
             } catch {
                 errorMessage = error.localizedDescription

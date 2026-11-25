@@ -123,6 +123,7 @@ struct AccountEditorSheet: View {
                                     Label("Service Logo", systemImage: "sparkles")
                                     Spacer()
                                     BrandAvatarView(account: existingAccount, size: 28, logoRevision: vault.logoCacheRevision)
+                                        .equatable()
                                 }
                             }
                         }
