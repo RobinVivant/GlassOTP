@@ -12,6 +12,8 @@ struct RootTabView: View {
     @Environment(VaultViewModel.self) private var vault
     @State private var selectedTab: AppTab = .vault
     @State private var searchQuery = ""
+    @State private var pendingScannedAccount: OTPAccount?
+    @State private var pendingBrandPickerAccount: OTPAccount?
 
     var body: some View {
         @Bindable var bindableVault = vault
@@ -58,13 +60,18 @@ struct RootTabView: View {
                 vault.pendingImportFile = nil
             }
         }
-        .sheet(isPresented: $bindableVault.showingScannerSheet) {
+        .sheet(isPresented: $bindableVault.showingScannerSheet, onDismiss: {
+            if let scanned = pendingScannedAccount {
+                pendingScannedAccount = nil
+                vault.editingAccount = scanned
+            }
+        }) {
             QRScannerSheet { parsedAccounts in
                 if parsedAccounts.count == 1, let single = parsedAccounts.first {
-                    vault.editingAccount = single
+                    pendingScannedAccount = single
                 } else if !parsedAccounts.isEmpty {
-                    let count = vault.importAccounts(parsedAccounts, folders: [], skipDuplicates: true)
-                    if count == 0 {
+                    let summary = vault.importAccounts(parsedAccounts, folders: [], skipDuplicates: true)
+                    if summary.saved && summary.addedCount == 0 {
                         vault.alertMessage = "All scanned accounts are already in your vault."
                     }
                 }
@@ -76,8 +83,19 @@ struct RootTabView: View {
         .sheet(isPresented: $bindableVault.showingAutoCategorizeSheet) {
             AutoCategorizeSheet()
         }
-        .sheet(item: $bindableVault.editingAccount) { account in
-            AccountEditorSheet(account: account, defaultFolderID: account.folderID)
+        .sheet(item: $bindableVault.editingAccount, onDismiss: {
+            if let target = pendingBrandPickerAccount {
+                pendingBrandPickerAccount = nil
+                vault.brandPickerAccount = target
+            }
+        }) { account in
+            AccountEditorSheet(
+                account: account,
+                defaultFolderID: account.folderID,
+                onOpenBrandPicker: { target in
+                    pendingBrandPickerAccount = target
+                }
+            )
         }
         .sheet(item: $bindableVault.brandPickerAccount) { account in
             BrandPickerSheet(account: account)
@@ -102,7 +120,10 @@ struct RootTabView: View {
         ) {
             Button("Import All") {
                 if let incoming = vault.pendingURIAccounts {
-                    vault.importAccounts(incoming, folders: [], skipDuplicates: true)
+                    let summary = vault.importAccounts(incoming, folders: [], skipDuplicates: true)
+                    if summary.saved && summary.addedCount == 0 {
+                        vault.alertMessage = "All scanned accounts are already in your vault."
+                    }
                     vault.pendingURIAccounts = nil
                 }
             }

@@ -55,6 +55,9 @@ struct PinnedOTPCardView: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(account.displayTitle) \(account.displaySubtitle)")
+        .accessibilityHint(isVisible ? "Double-tap to copy code" : "Double-tap to reveal or copy code")
     }
 }
 
@@ -62,6 +65,7 @@ struct OTPCardView: View {
     @Environment(VaultViewModel.self) private var vault
     let account: OTPAccount
     let folderName: String?
+    @State private var showingDeleteConfirmation = false
 
     var body: some View {
         let isVisible = vault.isCodeVisible(for: account.id)
@@ -180,10 +184,26 @@ struct OTPCardView: View {
             Divider()
 
             Button(role: .destructive) {
-                vault.deleteAccount(account)
+                showingDeleteConfirmation = true
             } label: {
                 Label("Delete", systemImage: "trash")
             }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("\(account.displayTitle)\(account.displaySubtitle.isEmpty ? "" : ", \(account.displaySubtitle)")")
+        .accessibilityHint(isVisible ? "Tap to copy verification code" : "Tap to reveal verification code")
+        .confirmationDialog(
+            "Delete \(account.displayTitle)?",
+            isPresented: $showingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Account", role: .destructive) {
+                vault.deleteAccount(account)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the 2FA secret key for \(account.displayTitle) from your vault. Make sure you still have recovery access before deleting.")
         }
     }
 }
@@ -193,7 +213,11 @@ private struct PinnedOTPLiveRingView: View {
     let account: OTPAccount
 
     var body: some View {
-        if account.type == .totp {
+        if !account.isSupportedAlgorithm {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.subheadline)
+                .foregroundStyle(.orange)
+        } else if account.type == .totp {
             let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
             CountdownRingView(
                 remainingSeconds: timing.remainingSeconds,
@@ -219,7 +243,10 @@ private struct OTPLiveCodeText: View {
         let isExpiring: Bool
         let displayedText: String
 
-        if account.type == .totp {
+        if !account.isSupportedAlgorithm {
+            isExpiring = false
+            displayedText = isVisible ? "Unsupported" : "••• •••"
+        } else if account.type == .totp {
             let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
             isExpiring = timing.remainingSeconds <= 5
             if isVisible {
@@ -266,7 +293,18 @@ private struct OTPLiveRightCluster: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if account.type == .totp {
+            if !account.isSupportedAlgorithm {
+                codeStack(
+                    codeText: isVisible ? "Unsupported" : "••• •••",
+                    nextCodeText: nil,
+                    isExpiring: false
+                )
+
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 30, height: 30)
+            } else if account.type == .totp {
                 let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
                 let isExpiring = timing.remainingSeconds <= 5
 
@@ -355,7 +393,8 @@ private struct OTPExpiringBorderOverlay: View {
     let cornerRadius: CGFloat
 
     var body: some View {
-        let isExpiring = account.type == .totp
+        let isExpiring = account.isSupportedAlgorithm
+            && account.type == .totp
             && OTPGenerator.totpTiming(period: account.period, at: clock.now).remainingSeconds <= 5
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .strokeBorder(

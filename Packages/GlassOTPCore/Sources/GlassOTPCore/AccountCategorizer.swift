@@ -49,8 +49,12 @@ public enum AccountCategorizer {
             $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 .caseInsensitiveCompare("Accounts") == .orderedSame
         }
+        let validFolderIDs = Set(folders.map(\.id))
         let uncategorizedCount = accounts.reduce(into: 0) { count, account in
-            if account.folderID == nil { count += 1 }
+            if let folderID = account.folderID, validFolderIDs.contains(folderID) {
+                return
+            }
+            count += 1
         }
         let onlyDefaultFolder = folders.count == 1 && defaultAccountsFolder != nil
         return uncategorizedCount >= 2 || (onlyDefaultFolder && accounts.count >= 2)
@@ -79,7 +83,7 @@ public enum AccountCategorizer {
         ]
 
         for rule in keywordRules {
-            if rule.keywords.contains(where: { combined.contains($0) }) {
+            if rule.keywords.contains(where: { Self.matchesWord(in: combined, keyword: $0) }) {
                 return rule.category
             }
         }
@@ -87,12 +91,37 @@ public enum AccountCategorizer {
         return .personal
     }
 
+    private static func matchesWord(in text: String, keyword: String) -> Bool {
+        var searchStart = text.startIndex
+        while let range = text.range(of: keyword, range: searchStart..<text.endIndex) {
+            let beforeOK: Bool
+            if range.lowerBound == text.startIndex {
+                beforeOK = true
+            } else {
+                let prev = text[text.index(before: range.lowerBound)]
+                beforeOK = !prev.isLetter && !prev.isNumber
+            }
+            let afterOK: Bool
+            if range.upperBound == text.endIndex {
+                afterOK = true
+            } else {
+                let next = text[range.upperBound]
+                afterOK = !next.isLetter && !next.isNumber
+            }
+            if beforeOK && afterOK {
+                return true
+            }
+            searchStart = range.upperBound
+        }
+        return false
+    }
+
     public static func buildPlan(accounts: [OTPAccount], folders: [OTPFolder]) -> CategorizationPlan {
         let folderLookup = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0.name) })
         let items = accounts.map { account in
             let brand = BrandCatalog.shared.match(account: account)
             let category = categorize(account: account, matchedBrand: brand)
-            let domain = BrandCatalog.shared.inferredDomain(for: account, includeHeuristicFallback: true)
+            let domain = BrandCatalog.shared.inferredDomain(for: account, includeHeuristicFallback: false)
             return CategorizationItem(
                 account: account,
                 matchedBrand: brand,
@@ -162,7 +191,7 @@ public enum AccountCategorizer {
             }
 
             updatedAccounts[idx].folderID = folderID
-            updatedAccounts[idx].updatedAt = Date()
+            updatedAccounts[idx].updatedAt = Date.monotonicTimestamp(after: updatedAccounts[idx].updatedAt)
         }
 
         if removeEmptyDefaultFolder {
@@ -173,8 +202,9 @@ public enum AccountCategorizer {
             }
         }
 
-        for idx in updatedFolders.indices {
+        for idx in updatedFolders.indices where updatedFolders[idx].sortOrder != idx {
             updatedFolders[idx].sortOrder = idx
+            updatedFolders[idx].updatedAt = Date.monotonicTimestamp(after: updatedFolders[idx].updatedAt)
         }
 
         return (updatedFolders, updatedAccounts)

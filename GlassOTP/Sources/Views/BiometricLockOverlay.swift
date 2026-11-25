@@ -39,9 +39,9 @@ struct BiometricLockOverlay: View {
                 }
 
                 Button {
-                    Task { await security.authenticate() }
+                    Task { await security.authenticate(userInitiated: true) }
                 } label: {
-                    Label("Unlock with \(security.biometryDisplayName)", systemImage: "faceid")
+                    Label("Unlock with \(security.biometryDisplayName)", systemImage: security.biometrySymbolName)
                         .font(.headline)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
@@ -51,5 +51,6 @@ struct BiometricLockOverlay: View {
             }
             .padding(32)
         }
+        .accessibilityAddTraits(.isModal)
     }
 }

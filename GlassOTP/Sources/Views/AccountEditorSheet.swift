@@ -6,6 +6,7 @@ struct AccountEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let existingAccount: OTPAccount?
+    var onOpenBrandPicker: ((OTPAccount) -> Void)? = nil
 
     @State private var issuer: String
     @State private var label: String
@@ -18,9 +19,15 @@ struct AccountEditorSheet: View {
     @State private var folderID: UUID?
     @State private var isPinned: Bool
     @State private var showAdvanced = false
+    @State private var saveErrorMessage: String?
 
-    init(account: OTPAccount?, defaultFolderID: UUID?) {
+    init(
+        account: OTPAccount?,
+        defaultFolderID: UUID?,
+        onOpenBrandPicker: ((OTPAccount) -> Void)? = nil
+    ) {
         self.existingAccount = account
+        self.onOpenBrandPicker = onOpenBrandPicker
         _issuer = State(initialValue: account?.issuer ?? "")
         _label = State(initialValue: account?.label ?? "")
         _base32Secret = State(initialValue: account.map { Base32.encode($0.secret) } ?? "")
@@ -31,6 +38,21 @@ struct AccountEditorSheet: View {
         _counter = State(initialValue: account?.counter ?? 0)
         _folderID = State(initialValue: account?.folderID ?? defaultFolderID)
         _isPinned = State(initialValue: account?.isPinned ?? false)
+        _showAdvanced = State(initialValue: account?.algorithm == .md5)
+    }
+
+    private var validFolderSelection: Binding<UUID?> {
+        Binding(
+            get: {
+                guard let fid = folderID, vault.folders.contains(where: { $0.id == fid }) else {
+                    return nil
+                }
+                return fid
+            },
+            set: { newValue in
+                folderID = newValue
+            }
+        )
     }
 
     private var decodedSecret: Data? {
@@ -42,7 +64,7 @@ struct AccountEditorSheet: View {
     }
 
     private var previewCode: String? {
-        guard let secret = decodedSecret else { return nil }
+        guard algorithm != .md5, let secret = decodedSecret else { return nil }
         let temp = OTPAccount(
             issuer: issuer,
             label: label,
@@ -62,7 +84,24 @@ struct AccountEditorSheet: View {
                 AmbientGlassBackground()
 
                 Form {
-                    if let previewCode {
+                    if let saveErrorMessage {
+                        Section {
+                            Label(saveErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+                    }
+
+                    if algorithm == .md5 {
+                        Section("Legacy Algorithm") {
+                            Label(
+                                "MD5 is no longer supported for generating codes. Choose SHA1, SHA256, or SHA512 under Advanced OTP Parameters to use this account.",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                        }
+                    } else if let previewCode {
                         Section("Live Preview") {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -105,7 +144,7 @@ struct AccountEditorSheet: View {
                         Toggle("Pin to Top & Widgets", isOn: $isPinned)
 
                         if !vault.folders.isEmpty {
-                            Picker("Folder", selection: $folderID) {
+                            Picker("Folder", selection: validFolderSelection) {
                                 Text("Uncategorized").tag(Optional<UUID>.none)
                                 ForEach(vault.folders) { folder in
                                     Label(folder.name, systemImage: folder.symbolName)
@@ -115,16 +154,27 @@ struct AccountEditorSheet: View {
                         }
 
                         if let existingAccount {
-                            Button {
-                                dismiss()
-                                vault.brandPickerAccount = existingAccount
-                            } label: {
-                                HStack {
-                                    Label("Service Logo", systemImage: "sparkles")
-                                    Spacer()
-                                    BrandAvatarView(account: existingAccount, size: 28, logoRevision: vault.logoCacheRevision)
-                                        .equatable()
+                            if vault.accounts.contains(where: { $0.id == existingAccount.id }) {
+                                Button {
+                                    if let onOpenBrandPicker {
+                                        onOpenBrandPicker(existingAccount)
+                                        dismiss()
+                                    } else {
+                                        dismiss()
+                                        vault.brandPickerAccount = existingAccount
+                                    }
+                                } label: {
+                                    HStack {
+                                        Label("Service Logo", systemImage: "sparkles")
+                                        Spacer()
+                                        BrandAvatarView(account: existingAccount, size: 28, logoRevision: vault.logoCacheRevision)
+                                            .equatable()
+                                    }
                                 }
+                            } else {
+                                Text("Save this scanned account first to choose a custom logo.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -138,21 +188,26 @@ struct AccountEditorSheet: View {
                             }
 
                             Picker("Algorithm", selection: $algorithm) {
-                                ForEach(OTPAlgorithm.allCases) { algo in
+                                if algorithm == .md5 {
+                                    Text("MD5 (Unsupported)").tag(OTPAlgorithm.md5)
+                                }
+                                ForEach(OTPAlgorithm.selectableCases) { algo in
                                     Text(algo.displayName).tag(algo)
                                 }
                             }
 
                             Picker("Digits", selection: $digits) {
-                                Text("6 Digits").tag(6)
-                                Text("7 Digits").tag(7)
-                                Text("8 Digits").tag(8)
+                                ForEach(4...10, id: \.self) { count in
+                                    Text("\(count) Digits").tag(count)
+                                }
                             }
 
                             if type == .totp {
+                                let periodOptions = Array(Set([15, 30, 60, 90, max(1, period)])).sorted()
                                 Picker("Period", selection: $period) {
-                                    Text("30 seconds").tag(30)
-                                    Text("60 seconds").tag(60)
+                                    ForEach(periodOptions, id: \.self) { secs in
+                                        Text("\(secs) seconds").tag(secs)
+                                    }
                                 }
                             } else {
                                 Stepper("Counter: \(counter)", value: $counter, in: 0...UInt64.max)
@@ -171,6 +226,28 @@ struct AccountEditorSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         guard let secret = decodedSecret else { return }
+                        saveErrorMessage = nil
+                        let resolvedResetAt: Date?
+                        let resolvedGeneration: UInt64
+                        if let existingAccount {
+                            let credentialsChanged = existingAccount.secret != secret
+                                || existingAccount.type != type
+                                || existingAccount.algorithm != algorithm
+                                || existingAccount.digits != digits
+                                || existingAccount.period != period
+                                || (type == .hotp && existingAccount.counter != counter)
+                            if credentialsChanged {
+                                let floor = (existingAccount.counterResetAt ?? .distantPast).addingTimeInterval(0.002)
+                                resolvedResetAt = max(Date(), floor)
+                                resolvedGeneration = existingAccount.credentialGeneration &+ 1
+                            } else {
+                                resolvedResetAt = existingAccount.counterResetAt
+                                resolvedGeneration = existingAccount.credentialGeneration
+                            }
+                        } else {
+                            resolvedResetAt = nil
+                            resolvedGeneration = 0
+                        }
                         let updated = OTPAccount(
                             id: existingAccount?.id ?? UUID(),
                             issuer: issuer,
@@ -181,18 +258,29 @@ struct AccountEditorSheet: View {
                             digits: digits,
                             period: period,
                             counter: counter,
-                            folderID: folderID,
+                            folderID: validFolderSelection.wrappedValue,
                             isPinned: isPinned,
                             sortOrder: existingAccount?.sortOrder ?? vault.accounts.count,
                             createdAt: existingAccount?.createdAt ?? Date(),
-                            updatedAt: Date(),
+                            updatedAt: Date.monotonicTimestamp(after: existingAccount?.updatedAt),
+                            counterResetAt: resolvedResetAt,
+                            credentialGeneration: resolvedGeneration,
                             customBrandSlug: existingAccount?.customBrandSlug,
                             customLogoDomain: existingAccount?.customLogoDomain
                         )
-                        vault.upsertAccount(updated)
-                        dismiss()
+                        if vault.upsertAccount(updated) {
+                            dismiss()
+                        } else {
+                            saveErrorMessage = vault.alertMessage ?? "Couldn't save account changes to Keychain."
+                            vault.alertMessage = nil
+                        }
                     }
-                    .disabled(decodedSecret == nil || (issuer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                    .disabled(algorithm == .md5 || decodedSecret == nil || (issuer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                }
+            }
+            .onAppear {
+                if let fid = folderID, !vault.folders.contains(where: { $0.id == fid }) {
+                    folderID = nil
                 }
             }
         }

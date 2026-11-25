@@ -5,10 +5,14 @@ import UIKit
 import UniformTypeIdentifiers
 
 struct AccountQRDetailSheet: View {
+    @Environment(VaultViewModel.self) private var vault
+    @Environment(BiometricLockManager.self) private var security
     @Environment(\.dismiss) private var dismiss
     let account: OTPAccount
 
     @State private var copiedKind: String?
+    @State private var renderedQRImage: UIImage?
+    private static let qrContext = CIContext()
 
     private var otpauthURI: String {
         OTPUriParser.toURI(account)
@@ -21,7 +25,7 @@ struct AccountQRDetailSheet: View {
 
                 VStack(spacing: 20) {
                     VStack(spacing: 14) {
-                        BrandAvatarView(account: account, size: 52, logoRevision: 0)
+                        BrandAvatarView(account: account, size: 52, logoRevision: vault.logoCacheRevision)
                             .equatable()
                         Text(account.displayTitle)
                             .font(.title3.bold())
@@ -31,7 +35,7 @@ struct AccountQRDetailSheet: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        if let qrImage = generateQRCode(from: otpauthURI) {
+                        if let qrImage = renderedQRImage {
                             Image(uiImage: qrImage)
                                 .interpolation(.none)
                                 .resizable()
@@ -81,10 +85,16 @@ struct AccountQRDetailSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .onAppear {
+                if renderedQRImage == nil {
+                    renderedQRImage = generateQRCode(from: otpauthURI)
+                }
+            }
         }
     }
 
     private func copySensitive(_ value: String, label: String) {
+        guard !security.isLocked else { return }
         UIPasteboard.general.setItems(
             [[UTType.utf8PlainText.identifier: value]],
             options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(60)]
@@ -94,14 +104,13 @@ struct AccountQRDetailSheet: View {
     }
 
     private func generateQRCode(from text: String) -> UIImage? {
-        let context = CIContext()
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(text.utf8)
         filter.correctionLevel = "M"
         guard let outputImage = filter.outputImage else { return nil }
         let transform = CGAffineTransform(scaleX: 10, y: 10)
         let scaled = outputImage.transformed(by: transform)
-        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+        guard let cgImage = Self.qrContext.createCGImage(scaled, from: scaled.extent) else { return nil }
         return UIImage(cgImage: cgImage)
     }
 }

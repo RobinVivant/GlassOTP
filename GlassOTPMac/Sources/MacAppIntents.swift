@@ -57,19 +57,21 @@ struct CopyMacOTPIntent: AppIntent {
     var account: MacOTPAccountEntity
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        guard let snapshot = try? KeychainVaultStore.shared.loadSnapshot(),
-              let target = snapshot.accounts.first(where: { $0.id == account.id }) else {
+        let outcome = try KeychainVaultStore.shared.resolveAccountForCopy(accountID: account.id)
+        guard outcome.snapshot != nil,
+              let resolvedTarget = outcome.account,
+              resolvedTarget.isSupportedAlgorithm else {
             return .result(value: "")
         }
 
-        let codeSnapshot = OTPGenerator.snapshot(for: target, at: Date(), includeNextCode: false)
+        let generationDate = Date()
+        let codeSnapshot = OTPGenerator.snapshot(for: resolvedTarget, at: generationDate, includeNextCode: false)
         await MainActor.run {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(codeSnapshot.code, forType: .string)
+            MacClipboardWriter.copyOTP(codeSnapshot.code)
             CopyHUDController.shared.show(
-                account: target,
+                account: resolvedTarget,
                 formattedCode: codeSnapshot.formattedCode,
-                remainingSeconds: target.type == .totp ? max(0, Int(ceil(codeSnapshot.remainingSeconds))) : nil,
+                remainingSeconds: resolvedTarget.type == .totp ? max(0, Int(ceil(codeSnapshot.remainingSeconds))) : nil,
                 didAutoType: false
             )
         }

@@ -290,6 +290,7 @@ public final class BrandCatalog: Sendable {
     }
 
     private func computeInferredDomain(for account: OTPAccount, includeHeuristicFallback: Bool) -> String? {
+        _ = includeHeuristicFallback
         if let custom = Self.cleanedDomain(account.customLogoDomain) {
             return custom
         }
@@ -298,23 +299,6 @@ public final class BrandCatalog: Sendable {
         }
         if let host = Self.extractHostIfDomain(account.issuer) {
             return host
-        }
-        if let atIndex = account.label.lastIndex(of: "@") {
-            let emailDomain = String(account.label[account.label.index(after: atIndex)...])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-            if emailDomain.contains(".") && !Self.consumerEmailDomains.contains(emailDomain) {
-                return emailDomain
-            }
-        }
-        if includeHeuristicFallback {
-            let base = account.issuer
-                .lowercased()
-                .components(separatedBy: CharacterSet.alphanumerics.inverted)
-                .joined()
-            if base.count >= 3 {
-                return "\(base).com"
-            }
         }
         return nil
     }
@@ -407,10 +391,77 @@ public final class BrandCatalog: Sendable {
         return cleanedDomain(normalized)
     }
 
+    private static let blockedDomainSuffixes: Set<String> = [
+        "local",
+        "localhost",
+        "internal",
+        "intranet",
+        "corp",
+        "home",
+        "lan",
+        "arpa",
+        "localdomain",
+        "invalid",
+        "test",
+        "onion",
+    ]
+
     public static func cleanedDomain(_ raw: String?) -> String? {
         guard let raw else { return nil }
-        let s = normalizeText(raw)
-        guard !s.isEmpty, s.contains("."), !s.contains(" ") else { return nil }
-        return s
+        var candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !candidate.isEmpty else { return nil }
+
+        if candidate.contains("@") || candidate.contains("?") || candidate.contains("#")
+            || candidate.contains("[") || candidate.contains("]") || candidate.contains("%")
+            || candidate.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            return nil
+        }
+
+        if candidate.hasPrefix("https://") {
+            candidate.removeFirst("https://".count)
+        } else if candidate.hasPrefix("http://") {
+            candidate.removeFirst("http://".count)
+        } else if candidate.contains("://") || candidate.contains(":") {
+            return nil
+        }
+
+        if candidate.contains(":") {
+            return nil
+        }
+
+        if candidate.hasSuffix("/") {
+            candidate.removeLast()
+        }
+        guard !candidate.contains("/") else { return nil }
+
+        if candidate.hasPrefix("www.") {
+            candidate.removeFirst(4)
+        }
+
+        guard !candidate.isEmpty, candidate.count <= 253 else { return nil }
+        let labels = candidate.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2 else { return nil }
+
+        for labelSub in labels {
+            let label = String(labelSub)
+            guard !label.isEmpty, label.count <= 63 else { return nil }
+            guard !label.hasPrefix("-"), !label.hasSuffix("-") else { return nil }
+            guard label.unicodeScalars.allSatisfy({ scalar in
+                (scalar >= "a" && scalar <= "z")
+                    || (scalar >= "0" && scalar <= "9")
+                    || scalar == "-"
+            }) else {
+                return nil
+            }
+        }
+
+        guard let tld = labels.last.map(String.init),
+              tld.count >= 2,
+              tld.unicodeScalars.allSatisfy({ $0 >= "a" && $0 <= "z" }),
+              !blockedDomainSuffixes.contains(tld) else {
+            return nil
+        }
+
+        return candidate
     }
 }

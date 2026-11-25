@@ -166,7 +166,13 @@ struct BrandAndCategorizerTests {
         #expect(BrandCatalog.shared.match(account: missAccount) == nil)
         #expect(BrandCatalog.shared.match(account: missAccount) == nil)
         #expect(BrandCatalog.shared.inferredDomain(for: missAccount) == nil)
-        #expect(BrandCatalog.shared.inferredDomain(for: missAccount, includeHeuristicFallback: true) == "unknowninternalportalxyz.com")
+        #expect(BrandCatalog.shared.inferredDomain(for: missAccount, includeHeuristicFallback: true) == nil)
+
+        let emailOnlyAccount = OTPAccount(issuer: "Internal Portal", label: "alice@corp.internal.com", secret: secret)
+        #expect(BrandCatalog.shared.inferredDomain(for: emailOnlyAccount, includeHeuristicFallback: true) == nil)
+
+        let domainIssuerAccount = OTPAccount(issuer: "auth.example.com", label: "alice", secret: secret)
+        #expect(BrandCatalog.shared.inferredDomain(for: domainIssuerAccount) == "auth.example.com")
 
         let overrideAccount = OTPAccount(
             issuer: "UnknownInternalPortalXYZ",
@@ -279,5 +285,38 @@ struct BrandAndCategorizerTests {
 
         SharedClipboardPreferences.isUniversalClipboardEnabled = true
         #expect(SharedClipboardPreferences.isUniversalClipboardEnabled == true)
+    }
+
+    @Test("BrandCatalog.cleanedDomain blocks private/SSRF hosts and normalizes valid domains")
+    func cleanedDomainValidation() {
+        #expect(BrandCatalog.cleanedDomain("https://www.GitHub.com/") == "github.com")
+        #expect(BrandCatalog.cleanedDomain("auth.example.com") == "auth.example.com")
+
+        for invalid in [
+            "127.0.0.1",
+            "192.168.1.1",
+            "[::1]",
+            "localhost",
+            "printer.local",
+            "sso.internal",
+            "dev.lan",
+            "example.com:8443",
+            "example.com/path",
+            "example.com?leak=1",
+            "user@example.com",
+            "singlelabel",
+        ] {
+            #expect(BrandCatalog.cleanedDomain(invalid) == nil)
+        }
+    }
+
+    @Test("AccountCategorizer uses whole-word boundaries to avoid substring false positives")
+    func categorizerWordBoundaries() {
+        let secret = Data("secret".utf8)
+        let mac = OTPAccount(issuer: "Macintosh Notes", label: "christopher@fairfield.org", secret: secret)
+        #expect(AccountCategorizer.categorize(account: mac) == .personal)
+
+        let ci = OTPAccount(issuer: "Build CI Runner", label: "ops", secret: secret)
+        #expect(AccountCategorizer.categorize(account: ci) == .dev)
     }
 }

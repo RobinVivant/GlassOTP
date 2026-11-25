@@ -7,14 +7,19 @@ import UniformTypeIdentifiers
 struct MenuBarPopoverView: View {
     @Bindable var vault: MacVaultViewModel
     let onDismiss: (Bool) -> Void
+    let onPickImportURL: (NSOpenPanel) -> URL?
 
     @FocusState private var searchFocused: Bool
     @State private var recordingAccountID: UUID?
+    @State private var activeRecorderID: String?
     @State private var importError: String?
     @State private var pendingImportData: (url: URL, data: Data)?
     @State private var detectedEncryptedFormat: String?
     @State private var importPassword = ""
     @State private var showingPasswordPrompt = false
+    @State private var isReadingImport = false
+    @State private var isImporting = false
+    @State private var showingICloudDisableConfirmation = false
 
     var body: some View {
         let displayed = vault.displayedAccounts
@@ -45,6 +50,12 @@ struct MenuBarPopoverView: View {
         .onChange(of: vault.focusSearchToken) { _, _ in
             searchFocused = true
         }
+        .onChange(of: vault.showingSettings) { _, isShowing in
+            if !isShowing {
+                activeRecorderID = nil
+                recordingAccountID = nil
+            }
+        }
         .onExitCommand {
             if vault.showingSettings {
                 vault.showingSettings = false
@@ -69,6 +80,21 @@ struct MenuBarPopoverView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(vault.alertMessage ?? "")
+        }
+        .confirmationDialog(
+            "Turn Off iCloud Keychain Sync?",
+            isPresented: $showingICloudDisableConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Use Local-Only & Keep iCloud Copy") {
+                vault.updateICloudSync(enabled: false, removeFromICloud: false)
+            }
+            Button("Turn Off & Delete iCloud Copy", role: .destructive) {
+                vault.updateICloudSync(enabled: false, removeFromICloud: true)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Deleting the iCloud copy writes a synchronizable empty retirement record so other devices running GlassOTP 1.2 or later switch to local storage with the vault they last loaded. Update and open your other devices first, or keep the iCloud copy and switch only this Mac to local storage.")
         }
     }
 
@@ -99,7 +125,7 @@ struct MenuBarPopoverView: View {
                     .font(.system(size: 12, weight: .semibold))
             }
             .buttonStyle(.borderless)
-            .help("Refresh iCloud Keychain Sync")
+            .help(vault.iCloudSyncEnabled ? "Refresh iCloud Keychain Sync" : "Reload Local Keychain Vault")
 
             Button {
                 withAnimation(.easeOut(duration: 0.15)) {
@@ -167,6 +193,28 @@ struct MenuBarPopoverView: View {
                     }
                     .padding(.horizontal, 12)
                 }
+            }
+
+            if !vault.accounts.isEmpty, let syncError = vault.bannerError {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    Text(syncError)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Refresh") {
+                        Task { await vault.reloadFromStoreAsync() }
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .buttonStyle(.borderless)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(.horizontal, 12)
             }
 
             if vault.accounts.isEmpty {
@@ -275,24 +323,35 @@ struct MenuBarPopoverView: View {
     private var emptyVaultView: some View {
         VStack(spacing: 12) {
             Spacer()
-            Image(systemName: "icloud.and.arrow.down")
+            Image(systemName: vault.iCloudSyncEnabled ? "icloud.and.arrow.down" : "lock.shield")
                 .font(.system(size: 32))
                 .foregroundStyle(Color.accentColor)
 
-            Text("Waiting for iCloud Keychain Sync")
+            Text(vault.iCloudSyncEnabled ? "Waiting for iCloud Keychain Sync" : "Local Keychain Vault")
                 .font(.headline)
 
-            Text("Open GlassOTP on your iPhone (with iCloud Keychain Sync enabled) so Apple syncs your vault to this Mac, or import an encrypted backup file directly.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 20)
+            Text(
+                vault.iCloudSyncEnabled
+                    ? "Open GlassOTP on your iPhone (with iCloud Keychain Sync enabled) so Apple syncs your vault to this Mac, or import an encrypted backup file directly."
+                    : "iCloud Keychain Sync is turned off on this Mac. Enable iCloud Keychain Sync to pull accounts from your other devices, or import an encrypted backup file directly."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 20)
 
             HStack(spacing: 8) {
-                Button("Refresh Sync") {
-                    vault.reloadFromStore()
+                if vault.iCloudSyncEnabled {
+                    Button("Refresh Sync") {
+                        Task { await vault.reloadFromStoreAsync() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Enable iCloud Keychain Sync") {
+                        vault.updateICloudSync(enabled: true, removeFromICloud: true)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
 
                 Button("Import Backup…") {
                     openBackupFilePanel()
@@ -300,7 +359,7 @@ struct MenuBarPopoverView: View {
                 .buttonStyle(.bordered)
             }
 
-            if let syncError = vault.syncError {
+            if let syncError = vault.bannerError {
                 Text(syncError)
                     .font(.caption2)
                     .foregroundStyle(.orange)
@@ -336,6 +395,26 @@ struct MenuBarPopoverView: View {
     private var settingsContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                if let syncError = vault.bannerError {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                        Text(syncError)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        Button("Refresh") {
+                            Task { await vault.reloadFromStoreAsync() }
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(10)
+                    .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text("GLOBAL SHORTCUTS")
                         .font(.caption2.weight(.bold))
@@ -351,6 +430,8 @@ struct MenuBarPopoverView: View {
                         }
                         Spacer()
                         HotKeyRecorderButton(
+                            recorderID: "quickPicker",
+                            activeRecorderID: $activeRecorderID,
                             combo: Binding(
                                 get: { vault.quickPickerHotKey },
                                 set: { vault.quickPickerHotKey = $0 }
@@ -376,6 +457,7 @@ struct MenuBarPopoverView: View {
                                             vault.assignHotKey(slot, for: account.id)
                                         } else {
                                             recordingAccountID = account.id
+                                            activeRecorderID = account.id.uuidString
                                         }
                                     } label: {
                                         Label(
@@ -428,6 +510,8 @@ struct MenuBarPopoverView: View {
                                     Spacer()
 
                                     HotKeyRecorderButton(
+                                        recorderID: account.id.uuidString,
+                                        activeRecorderID: $activeRecorderID,
                                         combo: Binding(
                                             get: { vault.hotKey(for: account.id) },
                                             set: {
@@ -438,7 +522,11 @@ struct MenuBarPopoverView: View {
                                             }
                                         ),
                                         hotKeyManager: vault.hotKeyManager,
-                                        startRecording: recordingAccountID == account.id
+                                        onCancelRecording: {
+                                            if recordingAccountID == account.id {
+                                                recordingAccountID = nil
+                                            }
+                                        }
                                     )
                                 }
                                 .padding(.horizontal, 10)
@@ -504,29 +592,46 @@ struct MenuBarPopoverView: View {
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.secondary)
 
-                    HStack(spacing: 8) {
-                        Button("Import Backup…") {
-                            openBackupFilePanel()
-                        }
-                        .font(.caption.weight(.medium))
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("iCloud Keychain Sync", isOn: iCloudSyncBinding)
+                            .font(.caption.weight(.medium))
 
-                        Spacer()
-
-                        Button("Refresh Sync") {
-                            vault.reloadFromStore()
+                        if vault.hasPendingICloudCleanup && !vault.iCloudSyncEnabled {
+                            Button("Retry Deleting iCloud Copy", role: .destructive) {
+                                vault.retryPendingICloudCleanup()
+                            }
+                            .font(.caption.weight(.medium))
                         }
-                        .font(.caption.weight(.medium))
 
-                        Button("Quit", role: .destructive) {
-                            NSApp.terminate(nil)
+                        Divider()
+                            .opacity(0.35)
+
+                        HStack(spacing: 8) {
+                            Button(isReadingImport ? "Reading…" : "Import Backup…") {
+                                openBackupFilePanel()
+                            }
+                            .font(.caption.weight(.medium))
+                            .disabled(isReadingImport || isImporting)
+
+                            Spacer()
+
+                            Button("Refresh Sync") {
+                                vault.reloadFromStore()
+                            }
+                            .font(.caption.weight(.medium))
+
+                            Button("Quit", role: .destructive) {
+                                NSApp.terminate(nil)
+                            }
+                            .font(.caption.weight(.medium))
                         }
-                        .font(.caption.weight(.medium))
                     }
                     .padding(10)
                     .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                     if let lastSync = vault.lastSyncDate {
-                        Text("Last synced \(lastSync.formatted(date: .omitted, time: .shortened)) • iCloud Keychain (\(vault.accounts.count) tokens)")
+                        let storeMode = vault.iCloudSyncEnabled ? "iCloud Keychain" : "Local Keychain"
+                        Text("Last synced \(lastSync.formatted(date: .omitted, time: .shortened)) • \(storeMode) (\(vault.accounts.count) tokens)")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
@@ -534,6 +639,19 @@ struct MenuBarPopoverView: View {
             }
             .padding(14)
         }
+    }
+
+    private var iCloudSyncBinding: Binding<Bool> {
+        Binding(
+            get: { vault.iCloudSyncEnabled },
+            set: { newValue in
+                if newValue {
+                    vault.updateICloudSync(enabled: true, removeFromICloud: true)
+                } else {
+                    showingICloudDisableConfirmation = true
+                }
+            }
+        )
     }
 
     private func passwordPromptContent(filename: String, data: Data) -> some View {
@@ -546,7 +664,9 @@ struct MenuBarPopoverView: View {
 
             SecureField("Backup password", text: $importPassword)
                 .textFieldStyle(.roundedBorder)
+                .disabled(isImporting)
                 .onSubmit {
+                    guard !isImporting, !importPassword.isEmpty else { return }
                     runBackupImport(data: data, password: importPassword, filename: filename)
                 }
 
@@ -564,12 +684,23 @@ struct MenuBarPopoverView: View {
                     importPassword = ""
                     importError = nil
                 }
+                .disabled(isImporting)
                 Spacer()
-                Button("Import") {
+                Button {
                     runBackupImport(data: data, password: importPassword, filename: filename)
+                } label: {
+                    if isImporting {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Decrypting…")
+                        }
+                    } else {
+                        Text("Import")
+                    }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(importPassword.isEmpty)
+                .disabled(importPassword.isEmpty || isImporting)
             }
             Spacer()
         }
@@ -583,8 +714,11 @@ struct MenuBarPopoverView: View {
     }
 
     private func copyAndDismiss(_ account: OTPAccount) {
-        onDismiss(true)
-        vault.copyCode(for: account, fromDirectHotKey: false)
+        Task { @MainActor in
+            if await vault.copyCode(for: account, fromDirectHotKey: false) {
+                onDismiss(true)
+            }
+        }
     }
 
     private func openBackupFilePanel() {
@@ -593,31 +727,66 @@ struct MenuBarPopoverView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.message = "Select an export from OTP Auth (.otpauthdb/.otpauth), 2FAS (.2fas), Aegis/Bitwarden/Raivo/Stratum/andOTP/FreeOTP+/Proton (.json), Apple Passwords/Bitwarden/1Password (.csv), Ente Auth/URI (.txt), or .glassotp."
-        guard panel.runModal() == .OK, let url = panel.url, let data = try? Data(contentsOf: url) else {
+        guard let url = onPickImportURL(panel) else {
             return
         }
 
         let filename = url.lastPathComponent
-        switch VaultImporter.inspect(data: data, filenameHint: filename) {
-        case .plaintext:
-            vault.showingSettings = false
-            runBackupImport(data: data, password: nil, filename: filename)
-        case .encrypted(let hint):
-            detectedEncryptedFormat = hint
-            pendingImportData = (url, data)
-            importPassword = ""
-            importError = nil
-            vault.showingSettings = false
-            showingPasswordPrompt = true
-        case .unsupportedEncrypted(_, let guidance):
-            vault.alertMessage = guidance
-        case .unrecognized:
-            vault.alertMessage = OTPImportError.invalidFileFormat.errorDescription
+        isReadingImport = true
+        Task.detached(priority: .userInitiated) {
+            do {
+                let values = try url.resourceValues(forKeys: [.fileSizeKey])
+                if let fileSize = values.fileSize, fileSize > VaultImporter.maxImportFileBytes {
+                    await MainActor.run {
+                        isReadingImport = false
+                        vault.alertMessage = "Import files are limited to 20 MB."
+                    }
+                    return
+                }
+                let data = try Data(contentsOf: url)
+                guard data.count <= VaultImporter.maxImportFileBytes else {
+                    await MainActor.run {
+                        isReadingImport = false
+                        vault.alertMessage = "Import files are limited to 20 MB."
+                    }
+                    return
+                }
+                let inspection = VaultImporter.inspect(data: data, filenameHint: filename)
+                await MainActor.run {
+                    isReadingImport = false
+                    switch inspection {
+                    case .plaintext:
+                        vault.showingSettings = false
+                        runBackupImport(data: data, password: nil, filename: filename)
+                    case .encrypted(let hint):
+                        detectedEncryptedFormat = hint
+                        pendingImportData = (url, data)
+                        importPassword = ""
+                        importError = nil
+                        vault.showingSettings = false
+                        showingPasswordPrompt = true
+                    case .unsupportedEncrypted(_, let guidance):
+                        vault.alertMessage = guidance
+                    case .fileTooLarge(let msg):
+                        vault.alertMessage = msg
+                    case .unrecognized:
+                        vault.alertMessage = OTPImportError.invalidFileFormat.errorDescription
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isReadingImport = false
+                    vault.alertMessage = "Couldn't read \(filename): \(error.localizedDescription)"
+                }
+            }
         }
     }
 
     private func runBackupImport(data: Data, password: String?, filename: String) {
+        guard !isImporting else { return }
+        isImporting = true
         Task {
+            defer { isImporting = false }
             let outcome = await vault.importBackupFile(data: data, password: password, filename: filename)
             switch outcome {
             case .success(let summary):
@@ -780,7 +949,17 @@ private struct MacLiveRightCluster: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            if account.type == .totp {
+            if !account.isSupportedAlgorithm {
+                Text("Unsupported")
+                    .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .frame(minHeight: 30, alignment: .trailing)
+
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(width: 24, height: 24)
+            } else if account.type == .totp {
                 let timing = OTPGenerator.totpTiming(period: account.period, at: clock.now)
                 let isExpiring = timing.remainingSeconds <= 5
                 let code = OTPGenerator.formatCode(
@@ -834,18 +1013,23 @@ private struct MacLiveRightCluster: View {
 }
 
 private struct HotKeyRecorderButton: View {
+    let recorderID: String
+    @Binding var activeRecorderID: String?
     @Binding var combo: HotKeyCombo?
     let hotKeyManager: GlobalHotKeyManager
-    var startRecording: Bool = false
+    var onCancelRecording: (() -> Void)? = nil
 
-    @State private var isRecording = false
     @State private var monitor: Any?
+
+    private var isRecording: Bool {
+        activeRecorderID == recorderID
+    }
 
     var body: some View {
         HStack(spacing: 4) {
             Button {
                 if isRecording {
-                    stopRecording()
+                    cancelRecording()
                 } else {
                     beginRecording()
                 }
@@ -874,31 +1058,45 @@ private struct HotKeyRecorderButton: View {
             }
         }
         .onAppear {
-            if startRecording {
-                beginRecording()
+            if isRecording {
+                installMonitor()
+            }
+        }
+        .onChange(of: activeRecorderID) { _, newValue in
+            if newValue == recorderID {
+                installMonitor()
+            } else {
+                removeMonitor()
             }
         }
         .onDisappear {
-            stopRecording()
+            if isRecording {
+                cancelRecording()
+            } else {
+                removeMonitor()
+            }
         }
     }
 
     private func beginRecording() {
-        guard !isRecording else { return }
-        isRecording = true
-        hotKeyManager.isPaused = true
+        activeRecorderID = recorderID
+    }
 
+    private func installMonitor() {
+        guard monitor == nil else { return }
+        hotKeyManager.isPaused = true
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.keyCode == UInt16(kVK_Escape) {
                 DispatchQueue.main.async {
-                    stopRecording()
+                    cancelRecording()
                 }
                 return nil
             }
             if let captured = HotKeyCombo.from(event: event) {
                 DispatchQueue.main.async {
                     combo = captured
-                    stopRecording()
+                    activeRecorderID = nil
+                    removeMonitor()
                 }
                 return nil
             }
@@ -906,12 +1104,19 @@ private struct HotKeyRecorderButton: View {
         }
     }
 
-    private func stopRecording() {
-        isRecording = false
-        hotKeyManager.isPaused = false
+    private func cancelRecording() {
+        activeRecorderID = nil
+        onCancelRecording?()
+        removeMonitor()
+    }
+
+    private func removeMonitor() {
         if let monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil
+        }
+        if activeRecorderID == nil {
+            hotKeyManager.isPaused = false
         }
     }
 }

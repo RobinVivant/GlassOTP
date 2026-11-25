@@ -8,9 +8,10 @@ struct AutoCategorizeSheet: View {
     @State private var plan: CategorizationPlan?
     @State private var assignments: [UUID: OTPCategory] = [:]
     @State private var selectedIDs: Set<UUID> = []
-    @State private var fetchWebLogos = true
+    @State private var fetchWebLogos = false
     @State private var removeEmptyDefaultFolder = true
     @State private var isApplying = false
+    @State private var applyErrorMessage: String?
 
     private var groupedCategories: [(category: OTPCategory, items: [CategorizationItem])] {
         guard let plan else { return [] }
@@ -94,8 +95,21 @@ struct AutoCategorizeSheet: View {
                 }
             }
 
-            Toggle("Fetch web logos for unmatched services", isOn: $fetchWebLogos)
-                .font(.subheadline)
+            Toggle(isOn: $fetchWebLogos) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Fetch web logos for custom domains")
+                        .font(.subheadline)
+                    Text("Queries Google Favicons (www.google.com) for selected accounts without a bundled logo.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let applyErrorMessage {
+                Label(applyErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
 
             if hasDefaultAccountsFolder {
                 Toggle("Remove empty 'Accounts' folder", isOn: $removeEmptyDefaultFolder)
@@ -240,13 +254,20 @@ struct AutoCategorizeSheet: View {
     }
 
     private func applyNow() {
+        applyErrorMessage = nil
         isApplying = true
         let filteredAssignments = assignments.filter { selectedIDs.contains($0.key) }
-        vault.applyCategorization(filteredAssignments, removeEmptyDefaultFolder: removeEmptyDefaultFolder)
+        guard vault.applyCategorization(filteredAssignments, removeEmptyDefaultFolder: removeEmptyDefaultFolder) else {
+            applyErrorMessage = vault.alertMessage ?? "Couldn't save categories to Keychain."
+            vault.alertMessage = nil
+            isApplying = false
+            return
+        }
 
         if fetchWebLogos {
+            let selectedAccounts = vault.accounts.filter { selectedIDs.contains($0.id) }
             Task {
-                let fetched = await vault.fetchMissingWebLogos()
+                let fetched = await vault.fetchMissingWebLogos(for: selectedAccounts)
                 isApplying = false
                 if fetched > 0 {
                     vault.alertMessage = "Organized \(filteredAssignments.count) accounts and fetched \(fetched) service \(fetched == 1 ? "logo" : "logos")."

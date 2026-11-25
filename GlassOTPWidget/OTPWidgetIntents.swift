@@ -20,17 +20,28 @@ struct AccountWidgetEntity: AppEntity, Identifiable, Hashable {
 
 struct AccountWidgetEntityQuery: EntityQuery {
     func entities(for identifiers: [AccountWidgetEntity.ID]) async throws -> [AccountWidgetEntity] {
+        if SharedSecurityPreferences.effectiveAppLockEnabled {
+            return identifiers.map {
+                AccountWidgetEntity(id: $0, title: "Locked Account", subtitle: "Turn off App Lock in GlassOTP to choose an account")
+            }
+        }
         let all = loadAllEntities()
         let idSet = Set(identifiers)
         return all.filter { idSet.contains($0.id) }
     }
 
     func suggestedEntities() async throws -> [AccountWidgetEntity] {
-        loadAllEntities()
+        guard !SharedSecurityPreferences.effectiveAppLockEnabled else {
+            return []
+        }
+        return loadAllEntities()
     }
 
     func defaultResult() async -> AccountWidgetEntity? {
-        loadAllEntities().first
+        guard !SharedSecurityPreferences.effectiveAppLockEnabled else {
+            return nil
+        }
+        return loadAllEntities().first
     }
 
     private func loadAllEntities() -> [AccountWidgetEntity] {

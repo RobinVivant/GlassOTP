@@ -2,8 +2,13 @@ import Foundation
 
 enum KeyedArchiveParser {
     private static let uidSentinel = "__GLASSOTP_UID__"
+    private static let maxArchiveBytes = 20 * 1024 * 1024
+    private static let maxDepth = 64
 
     static func parseRoot(from data: Data) throws -> Any {
+        guard data.count <= maxArchiveBytes else {
+            throw OTPImportError.corruptedArchive("Archive exceeds maximum supported size.")
+        }
         // Verify this looks like a property list before attempting deserialization
         guard let rawPlist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) else {
             throw OTPImportError.invalidFileFormat
@@ -11,6 +16,9 @@ enum KeyedArchiveParser {
 
         // Convert to XML plist so CFKeyedArchiverUID entries serialize cleanly as <dict><key>CF$UID</key><integer>N</integer></dict>
         let xmlData = try PropertyListSerialization.data(fromPropertyList: rawPlist, format: .xml, options: 0)
+        guard xmlData.count <= maxArchiveBytes * 2 else {
+            throw OTPImportError.corruptedArchive("Archive XML representation exceeds maximum supported size.")
+        }
         guard let xmlString = String(data: xmlData, encoding: .utf8) else {
             throw OTPImportError.corruptedArchive("Archive XML encoding failure.")
         }
@@ -30,7 +38,7 @@ enum KeyedArchiveParser {
 
         var cache: [Int: Any] = [:]
         var active = Set<Int>()
-        return resolveValue(rootRef, objects: objects, cache: &cache, active: &active) ?? [String: Any]()
+        return try resolveValue(rootRef, objects: objects, cache: &cache, active: &active, depth: 0) ?? [String: Any]()
     }
 
     private static func uidIndex(from value: Any) -> Int? {
@@ -46,18 +54,29 @@ enum KeyedArchiveParser {
         _ value: Any,
         objects: [Any],
         cache: inout [Int: Any],
-        active: inout Set<Int>
-    ) -> Any? {
+        active: inout Set<Int>,
+        depth: Int
+    ) throws -> Any? {
+        guard depth <= maxDepth else {
+            throw OTPImportError.corruptedArchive("Archive nesting exceeds safe depth.")
+        }
         if let idx = uidIndex(from: value) {
-            return resolveObject(at: idx, objects: objects, cache: &cache, active: &active)
+            return try resolveObject(at: idx, objects: objects, cache: &cache, active: &active, depth: depth + 1)
         }
         if let arr = value as? [Any] {
-            return arr.compactMap { resolveValue($0, objects: objects, cache: &cache, active: &active) }
+            var resolved: [Any] = []
+            resolved.reserveCapacity(arr.count)
+            for item in arr {
+                if let val = try resolveValue(item, objects: objects, cache: &cache, active: &active, depth: depth + 1) {
+                    resolved.append(val)
+                }
+            }
+            return resolved
         }
         if let dict = value as? [String: Any] {
             var resolved: [String: Any] = [:]
             for (k, v) in dict {
-                if let val = resolveValue(v, objects: objects, cache: &cache, active: &active) {
+                if let val = try resolveValue(v, objects: objects, cache: &cache, active: &active, depth: depth + 1) {
                     resolved[k] = val
                 }
             }
@@ -70,8 +89,12 @@ enum KeyedArchiveParser {
         at index: Int,
         objects: [Any],
         cache: inout [Int: Any],
-        active: inout Set<Int>
-    ) -> Any? {
+        active: inout Set<Int>,
+        depth: Int
+    ) throws -> Any? {
+        guard depth <= maxDepth else {
+            throw OTPImportError.corruptedArchive("Archive nesting exceeds safe depth.")
+        }
         guard index > 0, index < objects.count else {
             return nil // index 0 is $null
         }
@@ -100,25 +123,30 @@ enum KeyedArchiveParser {
                       let nsObjects = dict["NS.objects"] as? [Any] {
                 var unpacked: [String: Any] = [:]
                 for (kRef, vRef) in zip(nsKeys, nsObjects) {
-                    if let key = resolveValue(kRef, objects: objects, cache: &cache, active: &active) as? String,
-                       let val = resolveValue(vRef, objects: objects, cache: &cache, active: &active) {
+                    if let key = try resolveValue(kRef, objects: objects, cache: &cache, active: &active, depth: depth + 1) as? String,
+                       let val = try resolveValue(vRef, objects: objects, cache: &cache, active: &active, depth: depth + 1) {
                         unpacked[key] = val
                     }
                 }
                 result = unpacked
             } else if let nsObjects = dict["NS.objects"] as? [Any] {
-                result = nsObjects.compactMap {
-                    resolveValue($0, objects: objects, cache: &cache, active: &active)
+                var unpacked: [Any] = []
+                unpacked.reserveCapacity(nsObjects.count)
+                for item in nsObjects {
+                    if let val = try resolveValue(item, objects: objects, cache: &cache, active: &active, depth: depth + 1) {
+                        unpacked.append(val)
+                    }
                 }
+                result = unpacked
             } else {
                 var unpacked: [String: Any] = [:]
                 for (k, v) in dict where k != "$class" {
-                    if let val = resolveValue(v, objects: objects, cache: &cache, active: &active) {
+                    if let val = try resolveValue(v, objects: objects, cache: &cache, active: &active, depth: depth + 1) {
                         unpacked[k] = val
                     }
                 }
                 if let classRef = dict["$class"],
-                   let classDict = resolveValue(classRef, objects: objects, cache: &cache, active: &active) as? [String: Any],
+                   let classDict = try resolveValue(classRef, objects: objects, cache: &cache, active: &active, depth: depth + 1) as? [String: Any],
                    let className = classDict["$classname"] as? String {
                     unpacked["__className__"] = className
                 }

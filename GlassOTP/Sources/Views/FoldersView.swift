@@ -7,8 +7,10 @@ struct FoldersView: View {
 
     @State private var showingEditor = false
     @State private var editingFolder: OTPFolder?
+    @State private var deletingFolder: OTPFolder?
     @State private var folderName = ""
     @State private var folderSymbol = "folder.fill"
+    @State private var editorErrorMessage: String?
 
     private let symbolOptions = [
         "folder.fill", "house.fill", "briefcase.fill", "server.rack",
@@ -61,13 +63,14 @@ struct FoldersView: View {
                                     editingFolder = folder
                                     folderName = folder.name
                                     folderSymbol = folder.symbolName
+                                    editorErrorMessage = nil
                                     showingEditor = true
                                 } label: {
                                     Label("Edit Folder", systemImage: "pencil")
                                 }
 
                                 Button(role: .destructive) {
-                                    vault.deleteFolder(folder)
+                                    deletingFolder = folder
                                 } label: {
                                     Label("Delete Folder", systemImage: "trash")
                                 }
@@ -94,6 +97,7 @@ struct FoldersView: View {
                     editingFolder = nil
                     folderName = ""
                     folderSymbol = "folder.fill"
+                    editorErrorMessage = nil
                     showingEditor = true
                 } label: {
                     Image(systemName: "plus")
@@ -103,8 +107,19 @@ struct FoldersView: View {
         .sheet(isPresented: $showingEditor) {
             NavigationStack {
                 Form {
+                    if let editorErrorMessage {
+                        Section {
+                            Label(editorErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+                    }
+
                     Section("Folder Name") {
                         TextField("e.g. Work, Personal, Infra", text: $folderName)
+                            .onChange(of: folderName) { _, _ in
+                                editorErrorMessage = nil
+                            }
                     }
                     Section("Icon") {
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 14) {
@@ -135,18 +150,45 @@ struct FoldersView: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") {
+                            let saved: Bool
                             if let existing = editingFolder {
-                                vault.renameFolder(existing, to: folderName, symbolName: folderSymbol)
+                                saved = vault.renameFolder(existing, to: folderName, symbolName: folderSymbol)
                             } else {
-                                vault.addFolder(name: folderName, symbolName: folderSymbol)
+                                saved = vault.addFolder(name: folderName, symbolName: folderSymbol)
                             }
-                            showingEditor = false
+                            if saved {
+                                editorErrorMessage = nil
+                                showingEditor = false
+                            } else {
+                                editorErrorMessage = vault.alertMessage ?? "Couldn't save folder."
+                                vault.alertMessage = nil
+                            }
                         }
                         .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
             }
             .presentationDetents([.medium])
+        }
+        .confirmationDialog(
+            "Delete Folder \"\(deletingFolder?.name ?? "")\"?",
+            isPresented: Binding(
+                get: { deletingFolder != nil },
+                set: { if !$0 { deletingFolder = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Folder", role: .destructive) {
+                if let folder = deletingFolder {
+                    vault.deleteFolder(folder)
+                    deletingFolder = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                deletingFolder = nil
+            }
+        } message: {
+            Text("Accounts inside this folder won't be deleted — they will move to Uncategorized.")
         }
     }
 

@@ -443,4 +443,155 @@ struct VaultImporterTests {
         #expect(uriRes.accounts.count == 2)
         #expect(uriRes.accounts[1].counter == 3)
     }
+
+    @Test("VaultImporter counts skipped entries, rejects oversized payloads, and caps Aegis slots")
+    func importerSkippedCountsAndCaps() throws {
+        let aegisWithSkipped = Data("""
+        {
+          "version": 1,
+          "header": { "slots": null, "params": null },
+          "db": {
+            "entries": [
+              { "type": "steam", "issuer": "Steam", "name": "user", "info": { "secret": "JBSWY3DPEHPK3PXP", "algo": "SHA1", "digits": 5, "period": 30 } },
+              { "type": "totp", "issuer": "BadAlgo", "name": "md5", "info": { "secret": "JBSWY3DPEHPK3PXP", "algo": "MD5", "digits": 6, "period": 30 } },
+              { "type": "totp", "issuer": "GitHub", "name": "valid", "info": { "secret": "JBSWY3DPEHPK3PXP", "algo": "SHA1", "digits": 6, "period": 30 } }
+            ]
+          }
+        }
+        """.utf8)
+        let aegisRes = try VaultImporter.importFile(data: aegisWithSkipped)
+        #expect(aegisRes.accounts.count == 1)
+        #expect(aegisRes.skippedEntries == 2)
+
+        let uriWithSkipped = Data("""
+        otpauth://totp/Valid:alex?secret=JBSWY3DPEHPK3PXP&issuer=Valid
+        otpauth://totp/Legacy:alex?secret=JBSWY3DPEHPK3PXP&algorithm=MD5
+        not-a-valid-line
+        """.utf8)
+        let uriRes = try VaultImporter.importFile(data: uriWithSkipped)
+        #expect(uriRes.accounts.count == 1)
+        #expect(uriRes.skippedEntries == 2)
+
+        let oversized = Data(repeating: 0x41, count: VaultImporter.maxImportFileBytes + 1)
+        #expect(VaultImporter.inspect(data: oversized) == .fileTooLarge("Import files are limited to 20 MB."))
+        #expect(throws: OTPImportError.self) {
+            try VaultImporter.importFile(data: oversized)
+        }
+    }
+
+    @Test("GlassOTP backup import skips MD5/empty entries and importer normalizes algorithms")
+    func glassOTPBackupMD5FilterAndAlgorithmNormalization() throws {
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let md5Account = OTPAccount(
+            issuer: "OldMD5",
+            label: "md5",
+            secret: Data("12345".utf8),
+            algorithm: .md5,
+            createdAt: fixedDate,
+            updatedAt: fixedDate
+        )
+        let validAccount = OTPAccount(
+            issuer: "GitHub",
+            label: "valid",
+            secret: Data("JBSWY3DPEHPK3PXP".utf8),
+            algorithm: .sha256,
+            createdAt: fixedDate,
+            updatedAt: fixedDate
+        )
+        let snapshot = OTPVaultSnapshot(accounts: [md5Account, validAccount], updatedAt: fixedDate)
+        let backupData = try GlassOTPBackupCodec.encode(snapshot: snapshot, password: "strong-password-1", log2N: 12)
+        let imported = try VaultImporter.importFile(data: backupData, password: "strong-password-1", filenameHint: "test.glassotp")
+        #expect(imported.accounts.count == 1)
+        #expect(imported.accounts[0].issuer == "GitHub")
+        #expect(imported.skippedEntries == 1)
+
+        let aegisNormalized = Data("""
+        {
+          "version": 1,
+          "header": { "slots": null, "params": null },
+          "db": {
+            "entries": [
+              { "type": "totp", "issuer": "HyphenSHA", "name": "a", "info": { "secret": "JBSWY3DPEHPK3PXP", "algo": "HMAC-SHA512", "digits": 6, "period": 30 } },
+              { "type": "totp", "issuer": "UnknownAlgo", "name": "b", "info": { "secret": "JBSWY3DPEHPK3PXP", "algo": "BLAKE2B", "digits": 6, "period": 30 } }
+            ]
+          }
+        }
+        """.utf8)
+        let res = try VaultImporter.importFile(data: aegisNormalized)
+        #expect(res.accounts.count == 1)
+        #expect(res.accounts[0].algorithm == .sha512)
+        #expect(res.skippedEntries == 1)
+
+        // Stratum / Authenticator Pro unknown numeric algorithm is skipped instead of falling back to SHA-1
+        let apUnknownAlgo = Data("""
+        {
+          "Authenticators": [
+            { "Type": 2, "Issuer": "Valid", "Username": "a", "Secret": "JBSWY3DPEHPK3PXP", "Algorithm": 0, "Digits": 6, "Period": 30 },
+            { "Type": 2, "Issuer": "UnknownNum", "Username": "b", "Secret": "JBSWY3DPEHPK3PXP", "Algorithm": 9, "Digits": 6, "Period": 30 }
+          ]
+        }
+        """.utf8)
+        let apRes = try VaultImporter.importFile(data: apUnknownAlgo)
+        #expect(apRes.accounts.count == 1)
+        #expect(apRes.accounts[0].issuer == "Valid")
+        #expect(apRes.skippedEntries == 1)
+
+        // Google migration unknown enum algorithm throws unsupportedAlgorithm
+        var entry = Data()
+        entry.append(contentsOf: [0x0A, 0x05])
+        entry.append(Data("12345".utf8))
+        entry.append(contentsOf: [0x20, 0x09]) // field 4 (algorithm) = 9
+        var migration = Data()
+        migration.append(contentsOf: [0x0A, UInt8(entry.count)])
+        migration.append(entry)
+        let encoded = migration.base64EncodedString().addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+        #expect(throws: OTPUriError.unsupportedAlgorithm("enum(9)")) {
+            try OTPUriParser.parse("otpauth-migration://offline?data=\(encoded)")
+        }
+    }
+
+    @Test("OTPAuthImporter maps numeric algorithms 0..3, skips unknown algorithms in backups, and throws corruptedArchive on unsupported single account")
+    func otpAuthImporterNumericAlgorithmsAndSingleAccountError() throws {
+        let password = "otpauth-test-password"
+
+        // Backup database (.otpauthdb v1.1) with algorithms 0, 1, 2, 3 and unknown 9
+        let folderAccounts: [[String: Any]] = [
+            ["issuer": "ZeroSHA1", "label": "0", "secret": Data("11111".utf8), "type": 2, "algorithm": 0],
+            ["issuer": "OneSHA1", "label": "1", "secret": Data("22222".utf8), "type": 2, "algorithm": 1],
+            ["issuer": "TwoSHA256", "label": "2", "secret": Data("33333".utf8), "type": 2, "algorithm": 2],
+            ["issuer": "ThreeSHA512", "label": "3", "secret": Data("44444".utf8), "type": 2, "algorithm": 3],
+            ["issuer": "UnknownAlgo", "label": "9", "secret": Data("55555".utf8), "type": 2, "algorithm": 9],
+        ]
+        let dbInner: [String: Any] = ["Folders": [["name": "Work", "accounts": folderAccounts]]]
+        let dbInnerPlist = try NSKeyedArchiver.archivedData(withRootObject: dbInner, requiringSecureCoding: false)
+        let dbWrapped = try CryptoPrimitives.rncryptorV3Encrypt(plaintext: dbInnerPlist, password: password)
+        let dbOuter: [String: Any] = ["Version": 1.1, "WrappedData": dbWrapped]
+        let dbOuterPlist = try NSKeyedArchiver.archivedData(withRootObject: dbOuter, requiringSecureCoding: false)
+        let dbBytes = try CryptoPrimitives.aes256CBCEncrypt(
+            plaintext: dbOuterPlist,
+            key: CryptoPrimitives.sha256(Data("Authenticator".utf8)),
+            iv: Data(repeating: 0, count: 16)
+        )
+
+        let dbResult = try OTPAuthImporter.importFile(data: dbBytes, password: password, filenameHint: "backup.otpauthdb")
+        #expect(dbResult.accounts.count == 4)
+        #expect(dbResult.accounts.map(\.algorithm) == [.sha1, .sha1, .sha256, .sha512])
+        #expect(dbResult.skippedEntries == 1)
+
+        // Single-account (.otpauth v1.2) with unknown algorithm must throw corruptedArchive, NOT wrongPassword
+        let singleInner: [String: Any] = ["issuer": "Legacy", "label": "u", "secret": Data("12345".utf8), "type": 2, "algorithm": 9]
+        let singleInnerPlist = try NSKeyedArchiver.archivedData(withRootObject: singleInner, requiringSecureCoding: false)
+        let singleEncrypted = try CryptoPrimitives.rncryptorV3Encrypt(plaintext: singleInnerPlist, password: password)
+        let singleOuter: [String: Any] = ["Version": 1.2, "Data": singleEncrypted]
+        let singleOuterPlist = try NSKeyedArchiver.archivedData(withRootObject: singleOuter, requiringSecureCoding: false)
+        let singleBytes = try CryptoPrimitives.aes256CBCEncrypt(
+            plaintext: singleOuterPlist,
+            key: CryptoPrimitives.sha256(Data("OTPAuth".utf8)),
+            iv: Data(repeating: 0, count: 16)
+        )
+
+        #expect(throws: OTPImportError.corruptedArchive("This OTP Auth account uses an unsupported algorithm or empty secret.")) {
+            try OTPAuthImporter.importFile(data: singleBytes, password: password, filenameHint: "single.otpauth")
+        }
+    }
 }

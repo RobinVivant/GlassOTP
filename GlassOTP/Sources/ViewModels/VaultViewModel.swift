@@ -51,11 +51,9 @@ final class VaultViewModel {
         }
     }
 
-    var iCloudSyncEnabled: Bool {
-        didSet {
-            store.setICloudSyncEnabled(iCloudSyncEnabled)
-        }
-    }
+    private(set) var iCloudSyncEnabled: Bool
+    private(set) var hasPendingICloudCleanup: Bool
+    private(set) var hasLoadError = false
 
     var hideCodesInApp: Bool {
         didSet {
@@ -72,15 +70,33 @@ final class VaultViewModel {
 
     var revealedAccountIDs: Set<UUID> = []
 
+    private struct PendingForegroundCopy {
+        let requestID: UInt64
+        let lockEpoch: UInt64
+        let account: OTPAccount
+        let reservedHOTPCode: String?
+        let reservedHOTPFormattedCode: String?
+        let expectedPostReservationCounter: UInt64?
+        let createdAt: ContinuousClock.Instant
+    }
+
     private let store: KeychainVaultStore
     private var toastDismissTask: Task<Void, Never>?
-    @ObservationIgnored private var pendingForegroundCopyCode: String?
+    @ObservationIgnored private var pendingForegroundCopy: PendingForegroundCopy?
+    @ObservationIgnored private var pendingIncomingURL: URL?
+    @ObservationIgnored private var accountTombstones: [OTPTombstone] = []
+    @ObservationIgnored private var folderTombstones: [OTPTombstone] = []
+    @ObservationIgnored private var hasCompletedInitialLoad = false
+    @ObservationIgnored private var lockEpoch: UInt64 = 0
+    @ObservationIgnored private var storeGeneration: UInt64 = 0
+    @ObservationIgnored private var copyRequestID: UInt64 = 0
     private static let hideCodesKey = "glassotp.hideCodesInApp"
     private static let dismissBannerKey = "glassotp.dismissAutoCategorizeBanner"
 
     init(store: KeychainVaultStore = .shared) {
         self.store = store
         self.iCloudSyncEnabled = store.isICloudSyncEnabled()
+        self.hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
         self.hideCodesInApp = UserDefaults.standard.bool(forKey: Self.hideCodesKey)
         self.universalClipboardEnabled = SharedClipboardPreferences.isUniversalClipboardEnabled
         self.dismissedAutoCategorizeBanner = UserDefaults.standard.bool(forKey: Self.dismissBannerKey)
@@ -88,7 +104,12 @@ final class VaultViewModel {
     }
 
     private func rebuildFolderLookup() {
-        folderNamesByID = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0.name) })
+        var map: [UUID: String] = [:]
+        map.reserveCapacity(folders.count)
+        for folder in folders {
+            map[folder.id] = folder.name
+        }
+        folderNamesByID = map
     }
 
     private func rebuildPinnedAccounts() {
@@ -129,66 +150,339 @@ final class VaultViewModel {
         accounts.filter { $0.folderID == folderID }.count
     }
 
+    private func applySnapshotToMemory(_ snapshot: OTPVaultSnapshot, nonBlockingNotice: Bool = false) {
+        storeGeneration &+= 1
+        iCloudSyncEnabled = store.isICloudSyncEnabled()
+        let sortedFolders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
+        let sortedAccounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
+        if folders != sortedFolders {
+            folders = sortedFolders
+        }
+        if accounts != sortedAccounts {
+            accounts = sortedAccounts
+        }
+        accountTombstones = snapshot.accountTombstones
+        folderTombstones = snapshot.folderTombstones
+        if let selectedFolderID, !sortedFolders.contains(where: { $0.id == selectedFolderID }) {
+            self.selectedFolderID = nil
+        }
+        hasLoadError = false
+        hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+        consumePeerRetirementNoticeIfNeeded(nonBlocking: nonBlockingNotice)
+    }
+
+    private func consumePeerRetirementNoticeIfNeeded(nonBlocking: Bool = false) {
+        if store.consumePendingPeerRetirementNotice(nonBlocking: nonBlocking) {
+            alertMessage = "Another device turned off iCloud Keychain Sync and deleted the cloud copy. This device now stores your vault locally."
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+    }
+
+    func clearPendingForegroundCopy() {
+        copyRequestID &+= 1
+        pendingForegroundCopy = nil
+    }
+
     func reloadFromStore() {
+        let prevFolders = folders
+        let prevAccounts = accounts
+        let prevSync = iCloudSyncEnabled
+        defer { hasCompletedInitialLoad = true }
+
+        storeGeneration &+= 1
         do {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
             if let snapshot = try store.loadSnapshot() {
-                folders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
-                accounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
+                applySnapshotToMemory(snapshot)
+            } else {
+                iCloudSyncEnabled = store.isICloudSyncEnabled()
+                if !folders.isEmpty { folders = [] }
+                if !accounts.isEmpty { accounts = [] }
+                accountTombstones = []
+                folderTombstones = []
+                selectedFolderID = nil
+                hasLoadError = false
+                hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+                consumePeerRetirementNoticeIfNeeded()
+            }
+            if (hasCompletedInitialLoad && (folders != prevFolders || accounts != prevAccounts))
+                || iCloudSyncEnabled != prevSync {
+                WidgetCenter.shared.reloadAllTimelines()
             }
         } catch {
+            hasLoadError = true
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
             alertMessage = error.localizedDescription
         }
     }
 
-    func persist() {
+    func updateICloudSync(enabled: Bool, removeFromICloud: Bool = true) {
+        let prevSync = iCloudSyncEnabled
+        storeGeneration &+= 1
+        do {
+            let migrated = try store.setICloudSyncEnabled(enabled, removeOppositeBucket: removeFromICloud)
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if let migrated {
+                applySnapshotToMemory(migrated)
+                hasLoadError = false
+            } else {
+                reloadFromStore()
+            }
+            WidgetCenter.shared.reloadAllTimelines()
+        } catch let error as KeychainVaultError {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if case .cloudCleanupFailed = error {
+                reloadFromStore()
+                WidgetCenter.shared.reloadAllTimelines()
+            } else if iCloudSyncEnabled != prevSync || hasPendingICloudCleanup {
+                reloadFromStore()
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+            alertMessage = error.localizedDescription
+        } catch {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if iCloudSyncEnabled != prevSync || hasPendingICloudCleanup {
+                reloadFromStore()
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func retryPendingICloudCleanup() {
+        do {
+            let outcome = try store.retryPendingICloudCleanup()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if outcome != .nothingPending {
+                reloadFromStore()
+            }
+            switch outcome {
+            case .nothingPending:
+                break
+            case .clearedCloudCopy:
+                alertMessage = "Deleted the leftover iCloud Keychain copy."
+            case .localCleanupOnlyPeerSuperseded:
+                alertMessage = "Finished local cleanup. Another device had already re-enabled iCloud Keychain Sync, so its cloud vault was kept."
+            case .localCleanupOnlyCloudUnverified:
+                alertMessage = "Finished local cleanup, but couldn't verify the current iCloud Keychain status."
+            }
+        } catch {
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func persist() -> Bool {
+        guard !hasLoadError else {
+            alertMessage = "Cannot save changes because the existing Keychain vault could not be loaded."
+            return false
+        }
+        storeGeneration &+= 1
         let snapshot = OTPVaultSnapshot(
             schemaVersion: 1,
             folders: folders,
             accounts: accounts,
-            updatedAt: Date()
+            updatedAt: Date(),
+            accountTombstones: accountTombstones,
+            folderTombstones: folderTombstones
         )
         do {
-            try store.saveSnapshot(snapshot)
+            let merged = try store.saveMergedSnapshot(snapshot)
+            applySnapshotToMemory(merged)
             WidgetCenter.shared.reloadAllTimelines()
+            return true
         } catch {
             alertMessage = error.localizedDescription
+            return false
         }
     }
 
     func commitPendingForegroundCopyIfNeeded() {
-        guard let pending = pendingForegroundCopyCode else { return }
-        pendingForegroundCopyCode = nil
-        OTPClipboardWriter.copyOTP(pending)
+        guard let pending = pendingForegroundCopy else { return }
+        pendingForegroundCopy = nil
+        let age = pending.createdAt.duration(to: .now)
+        guard !hasLoadError,
+              age >= .zero,
+              age <= .seconds(10),
+              pending.requestID == copyRequestID,
+              pending.lockEpoch == lockEpoch,
+              let currentAccount = accounts.first(where: { $0.id == pending.account.id }),
+              currentAccount.hasSameCredentialIdentity(as: pending.account),
+              pending.expectedPostReservationCounter == nil || currentAccount.counter == pending.expectedPostReservationCounter,
+              currentAccount.isSupportedAlgorithm else {
+            return
+        }
+
+        let now = Date()
+        let code: String
+        let formattedCode: String
+        if currentAccount.type == .hotp,
+           let reservedCode = pending.reservedHOTPCode,
+           let reservedFormatted = pending.reservedHOTPFormattedCode {
+            code = reservedCode
+            formattedCode = reservedFormatted
+        } else {
+            let generated = OTPGenerator.snapshot(for: currentAccount, at: now)
+            code = generated.code
+            formattedCode = generated.formattedCode
+        }
+
+        OTPClipboardWriter.copyOTP(code)
         let generator = UINotificationFeedbackGenerator()
         generator.prepare()
         generator.notificationOccurred(.success)
+        SharedWidgetStateStore.recordCopy(accountID: currentAccount.id, at: now)
+        showToast(title: currentAccount.displayTitle, formattedCode: formattedCode)
     }
 
-    func copyCode(for account: OTPAccount, at date: Date = Date(), reloadWidgets: Bool = false) {
-        let snapshot = OTPGenerator.snapshot(for: account, at: date)
-        OTPClipboardWriter.copyOTP(snapshot.code)
-
-        let generator = UINotificationFeedbackGenerator()
-        generator.prepare()
-        generator.notificationOccurred(.success)
-
-        if UIApplication.shared.applicationState != .active {
-            pendingForegroundCopyCode = snapshot.code
+    func copyCode(for account: OTPAccount, at date: Date? = nil, reloadWidgets: Bool = false) {
+        guard !hasLoadError else {
+            alertMessage = "Cannot copy codes because the existing Keychain vault could not be loaded."
+            return
         }
 
-        SharedWidgetStateStore.recordCopy(accountID: account.id, at: date)
-        if reloadWidgets {
-            WidgetCenter.shared.reloadAllTimelines()
+        let store = self.store
+        let accountID = account.id
+        let capturedLockEpoch = lockEpoch
+        storeGeneration &+= 1
+        let expectedGeneration = storeGeneration
+        copyRequestID &+= 1
+        let capturedCopyRequestID = copyRequestID
+
+        Task { @MainActor in
+            let outcome: (snapshot: OTPVaultSnapshot?, account: OTPAccount?, didMutate: Bool)
+            do {
+                outcome = try await Task.detached(priority: .userInitiated) {
+                    try store.resolveAccountForCopy(accountID: accountID)
+                }.value
+            } catch {
+                guard copyRequestID == capturedCopyRequestID, lockEpoch == capturedLockEpoch else {
+                    return
+                }
+                alertMessage = error.localizedDescription
+                return
+            }
+
+            let wasSupersededByStoreChange = (storeGeneration != expectedGeneration)
+            if !wasSupersededByStoreChange {
+                if let updatedSnapshot = outcome.snapshot {
+                    if outcome.didMutate
+                        || updatedSnapshot.accounts != accounts
+                        || updatedSnapshot.folders != folders
+                        || store.isICloudSyncEnabled() != iCloudSyncEnabled
+                        || SharedSecurityPreferences.hasPendingICloudCleanup != hasPendingICloudCleanup {
+                        applySnapshotToMemory(updatedSnapshot, nonBlockingNotice: !outcome.didMutate)
+                    } else {
+                        consumePeerRetirementNoticeIfNeeded(nonBlocking: !outcome.didMutate)
+                    }
+                } else {
+                    guard copyRequestID == capturedCopyRequestID, lockEpoch == capturedLockEpoch else {
+                        return
+                    }
+                    reloadFromStore()
+                    alertMessage = "That account is no longer in your vault."
+                    return
+                }
+            } else if outcome.didMutate {
+                reloadFromStore()
+            }
+
+            guard copyRequestID == capturedCopyRequestID, lockEpoch == capturedLockEpoch else {
+                return
+            }
+            guard let resolvedAccount = outcome.account else {
+                alertMessage = "That account is no longer in your vault."
+                return
+            }
+
+            let effectiveAccount: OTPAccount
+            if wasSupersededByStoreChange {
+                guard !hasLoadError else { return }
+                guard let currentAccount = accounts.first(where: { $0.id == resolvedAccount.id }) else {
+                    alertMessage = "That account is no longer in your vault."
+                    return
+                }
+                guard currentAccount.hasSameCredentialIdentity(as: resolvedAccount) else {
+                    alertMessage = "Account credentials changed. Tap again to copy the updated code."
+                    return
+                }
+                effectiveAccount = resolvedAccount.type == .hotp ? resolvedAccount : currentAccount
+            } else {
+                effectiveAccount = resolvedAccount
+            }
+
+            guard effectiveAccount.isSupportedAlgorithm else {
+                alertMessage = "\(effectiveAccount.displayTitle) uses legacy \(effectiveAccount.algorithm.displayName), which GlassOTP no longer generates."
+                return
+            }
+
+            let appState = UIApplication.shared.applicationState
+            guard appState != .background else {
+                return
+            }
+
+            let generationDate = date ?? Date()
+            let snapshot = OTPGenerator.snapshot(for: effectiveAccount, at: generationDate)
+            OTPClipboardWriter.copyOTP(snapshot.code)
+
+            let generator = UINotificationFeedbackGenerator()
+            generator.prepare()
+            generator.notificationOccurred(.success)
+
+            if appState != .active {
+                pendingForegroundCopy = PendingForegroundCopy(
+                    requestID: capturedCopyRequestID,
+                    lockEpoch: capturedLockEpoch,
+                    account: effectiveAccount,
+                    reservedHOTPCode: effectiveAccount.type == .hotp ? snapshot.code : nil,
+                    reservedHOTPFormattedCode: effectiveAccount.type == .hotp ? snapshot.formattedCode : nil,
+                    expectedPostReservationCounter: effectiveAccount.type == .hotp ? (effectiveAccount.counter &+ 1) : nil,
+                    createdAt: .now
+                )
+            }
+
+            SharedWidgetStateStore.recordCopy(accountID: effectiveAccount.id, at: generationDate)
+            if reloadWidgets || effectiveAccount.type == .hotp {
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+            showToast(title: effectiveAccount.displayTitle, formattedCode: snapshot.formattedCode)
         }
-        showToast(title: account.displayTitle, formattedCode: snapshot.formattedCode)
     }
 
     func incrementHOTP(for account: OTPAccount) {
-        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
-        accounts[index].counter &+= 1
-        accounts[index].updatedAt = Date()
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        persist()
+        guard account.isSupportedAlgorithm else {
+            alertMessage = "\(account.displayTitle) uses legacy \(account.algorithm.displayName), which GlassOTP no longer generates."
+            return
+        }
+        guard !hasLoadError else {
+            alertMessage = "Cannot save changes because the existing Keychain vault could not be loaded."
+            return
+        }
+        var found = false
+        do {
+            if let updated = try store.mutateSnapshotIfPresent({ snapshot in
+                guard let idx = snapshot.accounts.firstIndex(where: { $0.id == account.id }),
+                      snapshot.accounts[idx].isSupportedAlgorithm else {
+                    return false
+                }
+                found = true
+                snapshot.accounts[idx].counter &+= 1
+                snapshot.accounts[idx].updatedAt = Date.monotonicTimestamp(after: snapshot.accounts[idx].updatedAt)
+                return true
+            }), found {
+                applySnapshotToMemory(updated)
+                WidgetCenter.shared.reloadAllTimelines()
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            } else {
+                reloadFromStore()
+            }
+        } catch {
+            alertMessage = error.localizedDescription
+        }
     }
 
     func toggleReveal(for accountID: UUID) {
@@ -204,67 +498,118 @@ final class VaultViewModel {
     }
 
     func togglePin(_ account: OTPAccount) {
+        let prevAccounts = accounts
         guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[index].isPinned.toggle()
-        accounts[index].updatedAt = Date()
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        persist()
+        accounts[index].updatedAt = Date.monotonicTimestamp(after: accounts[index].updatedAt)
+        if persist() {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } else {
+            accounts = prevAccounts
+        }
     }
 
     func moveAccount(_ account: OTPAccount, to folderID: UUID?) {
+        let prevAccounts = accounts
         guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[index].folderID = folderID
-        accounts[index].updatedAt = Date()
-        persist()
+        accounts[index].updatedAt = Date.monotonicTimestamp(after: accounts[index].updatedAt)
+        if !persist() {
+            accounts = prevAccounts
+        }
     }
 
-    func upsertAccount(_ account: OTPAccount) {
+    @discardableResult
+    func upsertAccount(_ account: OTPAccount) -> Bool {
+        let prevFolders = folders
+        let prevAccounts = accounts
         if let index = accounts.firstIndex(where: { $0.id == account.id }) {
             var updated = account
-            updated.updatedAt = Date()
+            updated.updatedAt = Date.monotonicTimestamp(after: accounts[index].updatedAt)
             accounts[index] = updated
         } else {
             var created = account
             created.sortOrder = accounts.count
             accounts.append(created)
         }
-        persist()
+        guard persist() else {
+            folders = prevFolders
+            accounts = prevAccounts
+            return false
+        }
+        return true
     }
 
     func deleteAccount(_ account: OTPAccount) {
+        let prevAccounts = accounts
+        let prevTombstones = accountTombstones
+        let prevRevealed = revealedAccountIDs
+        accountTombstones.append(OTPTombstone(id: account.id, deletedAt: Date.monotonicTimestamp(after: account.updatedAt)))
         accounts.removeAll { $0.id == account.id }
         revealedAccountIDs.remove(account.id)
-        persist()
+        if !persist() {
+            accounts = prevAccounts
+            accountTombstones = prevTombstones
+            revealedAccountIDs = prevRevealed
+        }
     }
 
-    func updateBrandOverride(for account: OTPAccount, brandSlug: String?, customDomain: String?) {
-        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
+    @discardableResult
+    func updateBrandOverride(for account: OTPAccount, brandSlug: String?, customDomain: String?) -> Bool {
+        let prevAccounts = accounts
+        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return false }
         accounts[index].customBrandSlug = brandSlug
         accounts[index].customLogoDomain = customDomain
-        accounts[index].updatedAt = Date()
-        bumpLogoRevision()
-        persist()
+        accounts[index].updatedAt = Date.monotonicTimestamp(after: accounts[index].updatedAt)
+        if persist() {
+            bumpLogoRevision()
+            WidgetCenter.shared.reloadAllTimelines()
+            return true
+        } else {
+            accounts = prevAccounts
+            return false
+        }
     }
 
-    func applyCategorization(_ assignments: [UUID: OTPCategory], removeEmptyDefaultFolder: Bool) {
+    @discardableResult
+    func applyCategorization(_ assignments: [UUID: OTPCategory], removeEmptyDefaultFolder: Bool) -> Bool {
+        let prevFolders = folders
+        let prevAccounts = accounts
+        let prevTombstones = folderTombstones
+        let prevSelected = selectedFolderID
+        let prevDismissed = dismissedAutoCategorizeBanner
+
         let result = AccountCategorizer.apply(
             assignments: assignments,
             toAccounts: accounts,
             existingFolders: folders,
             removeEmptyDefaultFolder: removeEmptyDefaultFolder
         )
+        let keptFolderIDs = Set(result.folders.map(\.id))
+        let now = Date()
+        for folder in folders where !keptFolderIDs.contains(folder.id) {
+            folderTombstones.append(OTPTombstone(id: folder.id, deletedAt: now))
+        }
         folders = result.folders
         accounts = result.accounts
         if let selected = selectedFolderID, !folders.contains(where: { $0.id == selected }) {
             selectedFolderID = nil
         }
         dismissedAutoCategorizeBanner = true
-        persist()
+        if !persist() {
+            folders = prevFolders
+            accounts = prevAccounts
+            folderTombstones = prevTombstones
+            selectedFolderID = prevSelected
+            dismissedAutoCategorizeBanner = prevDismissed
+            return false
+        }
+        return true
     }
 
     @discardableResult
-    func fetchMissingWebLogos() async -> Int {
-        let fetched = await BrandLogoFetcher.fetchMissingLogos(for: accounts)
+    func fetchMissingWebLogos(for targetAccounts: [OTPAccount]? = nil) async -> Int {
+        let fetched = await BrandLogoFetcher.fetchMissingLogos(for: targetAccounts ?? accounts)
         if fetched > 0 {
             bumpLogoRevision()
             WidgetCenter.shared.reloadAllTimelines()
@@ -276,100 +621,193 @@ final class VaultViewModel {
         logoCacheRevision &+= 1
     }
 
-    func addFolder(name: String, symbolName: String) {
+    @discardableResult
+    func addFolder(name: String, symbolName: String) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return false }
         if folders.contains(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
-            return
+            alertMessage = "A folder named \"\(trimmed)\" already exists."
+            return false
         }
+        let prevFolders = folders
         let folder = OTPFolder(name: trimmed, symbolName: symbolName, sortOrder: folders.count)
         folders.append(folder)
-        persist()
+        if !persist() {
+            folders = prevFolders
+            return false
+        }
+        return true
     }
 
-    func renameFolder(_ folder: OTPFolder, to newName: String, symbolName: String) {
+    @discardableResult
+    func renameFolder(_ folder: OTPFolder, to newName: String, symbolName: String) -> Bool {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
-              let index = folders.firstIndex(where: { $0.id == folder.id }) else { return }
+              let index = folders.firstIndex(where: { $0.id == folder.id }) else { return false }
+        if folders.contains(where: {
+            $0.id != folder.id && $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            alertMessage = "A folder named \"\(trimmed)\" already exists."
+            return false
+        }
+        let prevFolders = folders
         folders[index].name = trimmed
         folders[index].symbolName = symbolName
-        persist()
+        folders[index].updatedAt = Date.monotonicTimestamp(after: folders[index].updatedAt)
+        if !persist() {
+            folders = prevFolders
+            return false
+        }
+        return true
     }
 
     func deleteFolder(_ folder: OTPFolder) {
+        let prevFolders = folders
+        let prevAccounts = accounts
+        let prevTombstones = folderTombstones
+        let prevSelected = selectedFolderID
+
+        let deletedAt = Date.monotonicTimestamp(after: folder.updatedAt)
+        folderTombstones.append(OTPTombstone(id: folder.id, deletedAt: deletedAt))
         folders.removeAll { $0.id == folder.id }
         for idx in accounts.indices where accounts[idx].folderID == folder.id {
             accounts[idx].folderID = nil
+            accounts[idx].updatedAt = Date.monotonicTimestamp(after: accounts[idx].updatedAt)
         }
         if selectedFolderID == folder.id {
             selectedFolderID = nil
         }
-        persist()
+        if !persist() {
+            folders = prevFolders
+            accounts = prevAccounts
+            folderTombstones = prevTombstones
+            selectedFolderID = prevSelected
+        }
     }
 
     func existingFingerprints() -> Set<String> {
         Set(accounts.map(\.fingerprint))
     }
 
+    struct ImportSummary {
+        let addedCount: Int
+        let addedFoldersCount: Int
+        let skippedDuplicates: Int
+        let saved: Bool
+    }
+
     @discardableResult
     func importAccounts(
         _ incomingAccounts: [OTPAccount],
         folders incomingFolders: [OTPFolder],
-        skipDuplicates: Bool
-    ) -> Int {
-        var folderMap: [UUID: UUID] = [:]
-        for incomingFolder in incomingFolders {
-            if let existing = folders.first(where: {
-                $0.name.caseInsensitiveCompare(incomingFolder.name) == .orderedSame
-            }) {
-                folderMap[incomingFolder.id] = existing.id
-            } else {
-                var newFolder = incomingFolder
-                newFolder.sortOrder = folders.count
-                folders.append(newFolder)
-                folderMap[incomingFolder.id] = newFolder.id
-            }
+        skipDuplicates: Bool,
+        preserveEmptyFolders: Bool = false
+    ) -> ImportSummary {
+        let plan = VaultImportReconciler.reconcile(
+            importedAccounts: incomingAccounts,
+            importedFolders: incomingFolders,
+            existingAccounts: accounts,
+            existingFolders: folders,
+            existingAccountTombstones: accountTombstones,
+            existingFolderTombstones: folderTombstones,
+            skipDuplicates: skipDuplicates,
+            preserveEmptyFolders: preserveEmptyFolders
+        )
+
+        let addedFoldersCount = max(0, plan.folders.count - folders.count)
+        let foldersChanged = plan.folders != folders
+        guard plan.addedCount > 0 || (preserveEmptyFolders && foldersChanged) else {
+            return ImportSummary(
+                addedCount: 0,
+                addedFoldersCount: 0,
+                skippedDuplicates: plan.skippedDuplicateCount,
+                saved: true
+            )
         }
 
-        var seenFingerprints = existingFingerprints()
-        var importedCount = 0
-
-        for var account in incomingAccounts {
-            if skipDuplicates && seenFingerprints.contains(account.fingerprint) {
-                continue
-            }
-            if let oldFolderID = account.folderID, let mappedFolderID = folderMap[oldFolderID] {
-                account.folderID = mappedFolderID
-            }
-            account.sortOrder = accounts.count
-            accounts.append(account)
-            seenFingerprints.insert(account.fingerprint)
-            importedCount += 1
+        let prevFolders = folders
+        let prevAccounts = accounts
+        folders = plan.folders
+        accounts = plan.accounts
+        let saved = persist()
+        if !saved {
+            folders = prevFolders
+            accounts = prevAccounts
         }
+        return ImportSummary(
+            addedCount: saved ? plan.addedCount : 0,
+            addedFoldersCount: saved ? addedFoldersCount : 0,
+            skippedDuplicates: plan.skippedDuplicateCount,
+            saved: saved
+        )
+    }
 
-        if importedCount > 0 || !incomingFolders.isEmpty {
-            persist()
-        }
-        return importedCount
+    func dismissSensitivePresentationsForLock() {
+        lockEpoch &+= 1
+        revealedAccountIDs.removeAll()
+        pendingForegroundCopy = nil
+        toastDismissTask?.cancel()
+        copiedToast = nil
+        qrDetailAccount = nil
+        editingAccount = nil
+        brandPickerAccount = nil
+        showingScannerSheet = false
+        showingNewAccountSheet = false
+        showingImportSheet = false
+        showingAutoCategorizeSheet = false
     }
 
     func makeBackupSnapshot() -> OTPVaultSnapshot {
-        OTPVaultSnapshot(
+        let validFolderIDs = Set(folders.map(\.id))
+        let sanitizedAccounts = accounts.map { account in
+            guard let folderID = account.folderID, !validFolderIDs.contains(folderID) else {
+                return account
+            }
+            var copy = account
+            copy.folderID = nil
+            return copy
+        }
+        return OTPVaultSnapshot(
             schemaVersion: 1,
             folders: folders,
-            accounts: accounts,
+            accounts: sanitizedAccounts,
             updatedAt: Date()
         )
     }
 
-    func handleIncomingURL(_ url: URL) {
+    func processPendingIncomingURLIfUnlocked(isLocked: Bool) {
+        guard !isLocked, let url = pendingIncomingURL else { return }
+        pendingIncomingURL = nil
+        handleIncomingURL(url, isLocked: false)
+    }
+
+    func handleIncomingURL(_ url: URL, isLocked: Bool = false) {
+        if isLocked {
+            if let oldPending = pendingIncomingURL,
+               oldPending.resolvingSymlinksInPath().standardizedFileURL != url.resolvingSymlinksInPath().standardizedFileURL {
+                cleanupInboxFileIfNeeded(oldPending)
+            }
+            pendingIncomingURL = url
+            return
+        }
+
         if url.isFileURL {
             let scoped = url.startAccessingSecurityScopedResource()
             defer {
                 if scoped { url.stopAccessingSecurityScopedResource() }
+                cleanupInboxFileIfNeeded(url)
             }
             do {
+                let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey])
+                if let fileSize = resourceValues.fileSize, fileSize > VaultImporter.maxImportFileBytes {
+                    alertMessage = "Import files are limited to 20 MB."
+                    return
+                }
                 let data = try Data(contentsOf: url)
+                guard data.count <= VaultImporter.maxImportFileBytes else {
+                    alertMessage = "Import files are limited to 20 MB."
+                    return
+                }
                 pendingImportFile = PendingImportFile(filename: url.lastPathComponent, data: data)
                 showingImportSheet = true
             } catch {
@@ -397,17 +835,55 @@ final class VaultViewModel {
            url.host?.lowercased() == "account",
            let idString = url.pathComponents.dropFirst().first,
            let accountID = UUID(uuidString: idString) {
-            if accounts.first(where: { $0.id == accountID }) == nil {
-                reloadFromStore()
+            reloadFromStore()
+            guard let match = accounts.first(where: { $0.id == accountID }) else {
+                return
             }
-            if let match = accounts.first(where: { $0.id == accountID }) {
-                if let folderID = match.folderID {
-                    selectedFolderID = folderID
-                } else {
-                    selectedFolderID = nil
-                }
-                copyCode(for: match, reloadWidgets: true)
+            selectedFolderID = match.folderID.flatMap { fid in
+                folders.contains(where: { $0.id == fid }) ? fid : nil
             }
+            copyCode(for: match, reloadWidgets: true)
+        }
+    }
+
+    private func cleanupInboxFileIfNeeded(_ url: URL) {
+        guard url.isFileURL,
+              let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let inboxPath = docs.appendingPathComponent("Inbox", isDirectory: true)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        let targetPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        guard targetPath.hasPrefix(inboxPath + "/") else {
+            return
+        }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    func purgeStaleInboxFiles(olderThan age: TimeInterval = 300) {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let inbox = docs.appendingPathComponent("Inbox", isDirectory: true)
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: inbox,
+            includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey]
+        ) else {
+            return
+        }
+        let pendingResolved = pendingIncomingURL?.resolvingSymlinksInPath().standardizedFileURL
+        let cutoff = Date().addingTimeInterval(-age)
+        for fileURL in contents {
+            if let pendingResolved,
+               fileURL.resolvingSymlinksInPath().standardizedFileURL == pendingResolved {
+                continue
+            }
+            let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
+            let modified = values?.contentModificationDate ?? values?.creationDate ?? Date()
+            guard modified <= cutoff else { continue }
+            try? FileManager.default.removeItem(at: fileURL)
         }
     }
 

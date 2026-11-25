@@ -15,10 +15,13 @@ struct OTPAuthImportSheet: View {
     @State private var errorMessage: String?
     @State private var showingFilePicker = false
     @State private var isDecrypting = false
+    @State private var hasDecodedImport = false
+    @State private var activeTask: Task<Void, Never>?
 
     @State private var decryptedFormat: String?
     @State private var decryptedFolders: [OTPFolder] = []
     @State private var decryptedAccounts: [OTPAccount] = []
+    @State private var skippedEntriesCount = 0
     @State private var selectedAccountIDs: Set<UUID> = []
     @State private var existingFingerprints: Set<String> = []
     @State private var skipDuplicates = true
@@ -49,7 +52,7 @@ struct OTPAuthImportSheet: View {
 
                 ScrollView {
                     VStack(spacing: 18) {
-                        if !decryptedAccounts.isEmpty {
+                        if hasDecodedImport {
                             reviewStepView
                         } else if isDecrypting && detectedEncryptedFormat == nil {
                             loadingStepView
@@ -80,26 +83,18 @@ struct OTPAuthImportSheet: View {
                 switch result {
                 case .success(let urls):
                     guard let url = urls.first else { return }
-                    let scoped = url.startAccessingSecurityScopedResource()
-                    defer {
-                        if scoped { url.stopAccessingSecurityScopedResource() }
-                    }
-                    do {
-                        let data = try Data(contentsOf: url)
-                        handleSelectedFile(PendingImportFile(filename: url.lastPathComponent, data: data))
-                    } catch {
-                        errorMessage = "Couldn't read file: \(error.localizedDescription)"
-                    }
+                    loadPickedURL(url)
                 case .failure(let error):
                     errorMessage = error.localizedDescription
                 }
             }
             .onAppear {
-                if selectedFile == nil, decryptedAccounts.isEmpty, let initialFile {
+                if selectedFile == nil, !hasDecodedImport, let initialFile {
                     handleSelectedFile(initialFile)
                 }
             }
             .onDisappear {
+                activeTask?.cancel()
                 onDismissCleanup()
             }
         }
@@ -199,17 +194,25 @@ struct OTPAuthImportSheet: View {
                     Spacer()
 
                     Button("Change") {
+                        activeTask?.cancel()
+                        isDecrypting = false
+                        hasDecodedImport = false
                         selectedFile = nil
                         detectedEncryptedFormat = nil
+                        decryptedFormat = nil
+                        decryptedFolders = []
+                        decryptedAccounts = []
                         password = ""
                         errorMessage = nil
                     }
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.glass)
+                    .disabled(isDecrypting)
                 }
 
                 SecureField("Backup Password", text: $password)
                     .textContentType(.password)
+                    .disabled(isDecrypting)
                     .padding(14)
                     .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .submitLabel(.go)
@@ -251,8 +254,36 @@ struct OTPAuthImportSheet: View {
     private var reviewStepView: some View {
         let existing = existingFingerprints
         let selectedAccounts = decryptedAccounts.filter { selectedAccountIDs.contains($0.id) }
-        let duplicateCount = selectedAccounts.filter { existing.contains($0.fingerprint) }.count
-        let finalImportCount = skipDuplicates ? (selectedAccounts.count - duplicateCount) : selectedAccounts.count
+        let preserveEmpty = decryptedFormat == "GlassOTP Encrypted Backup"
+            && selectedAccounts.count == decryptedAccounts.count
+        let skippingPlan = VaultImportReconciler.reconcile(
+            importedAccounts: selectedAccounts,
+            importedFolders: decryptedFolders,
+            existingAccounts: vault.accounts,
+            existingFolders: vault.folders,
+            skipDuplicates: true,
+            preserveEmptyFolders: preserveEmpty
+        )
+        let activePlan = skipDuplicates
+            ? skippingPlan
+            : VaultImportReconciler.reconcile(
+                importedAccounts: selectedAccounts,
+                importedFolders: decryptedFolders,
+                existingAccounts: vault.accounts,
+                existingFolders: vault.folders,
+                skipDuplicates: false,
+                preserveEmptyFolders: preserveEmpty
+            )
+        let duplicateCount = skippingPlan.skippedDuplicateCount
+        let finalImportCount = activePlan.addedCount
+        let newFolderCount = max(0, activePlan.folders.count - vault.folders.count)
+        let canImport = finalImportCount > 0 || (preserveEmpty && newFolderCount > 0)
+        let buttonTitle: String = {
+            if finalImportCount == 0 && newFolderCount > 0 {
+                return "Import \(newFolderCount) \(newFolderCount == 1 ? "Folder" : "Folders")"
+            }
+            return "Import \(finalImportCount) \(finalImportCount == 1 ? "Account" : "Accounts")"
+        }()
 
         return VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 10) {
@@ -280,38 +311,61 @@ struct OTPAuthImportSheet: View {
                     }
                 }
 
+                if skippedEntriesCount > 0 {
+                    HStack(spacing: 8) {
+                        Image(systemName: "info.circle.fill")
+                            .foregroundStyle(.orange)
+                        Text("Skipped \(skippedEntriesCount) unsupported \(skippedEntriesCount == 1 ? "entry" : "entries") (such as Steam, mOTP, MD5, or invalid secrets).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+
                 if duplicateCount > 0 {
                     Toggle("Skip \(duplicateCount) duplicate \(duplicateCount == 1 ? "account" : "accounts")", isOn: $skipDuplicates)
                         .font(.subheadline)
                 }
 
+                if let errorMessage {
+                    errorBanner(errorMessage)
+                }
+
                 Button {
-                    let count = vault.importAccounts(
+                    let summary = vault.importAccounts(
                         selectedAccounts,
                         folders: decryptedFolders,
-                        skipDuplicates: skipDuplicates
+                        skipDuplicates: skipDuplicates,
+                        preserveEmptyFolders: preserveEmpty
                     )
-                    if count > 0 && vault.shouldSuggestAutoCategorize {
-                        let plan = AccountCategorizer.buildPlan(accounts: vault.accounts, folders: vault.folders)
-                        let assignments = Dictionary(uniqueKeysWithValues: plan.items.map { ($0.id, $0.category) })
-                        vault.applyCategorization(assignments, removeEmptyDefaultFolder: true)
+                    guard summary.saved else {
+                        errorMessage = vault.alertMessage ?? "Couldn't save imported accounts to Keychain."
+                        vault.alertMessage = nil
+                        return
                     }
-                    Task {
-                        _ = await vault.fetchMissingWebLogos()
+                    let count = summary.addedCount
+                    let folderCount = summary.addedFoldersCount
+                    if count == 0 && folderCount > 0 {
+                        vault.alertMessage = "Imported \(folderCount) \(folderCount == 1 ? "folder" : "folders") into GlassOTP."
+                    } else if skippedEntriesCount > 0 && count > 0 {
+                        vault.alertMessage = "Imported \(count) \(count == 1 ? "account" : "accounts") into GlassOTP (\(skippedEntriesCount) unsupported skipped)."
+                    } else {
+                        vault.alertMessage = count == 0
+                            ? "All selected accounts were already in your vault."
+                            : "Imported \(count) \(count == 1 ? "account" : "accounts") into GlassOTP."
                     }
-                    vault.alertMessage = count == 0
-                        ? "All selected accounts were already in your vault."
-                        : "Imported \(count) \(count == 1 ? "account" : "accounts") into GlassOTP."
                     onDismissCleanup()
                     dismiss()
                 } label: {
-                    Text("Import \(finalImportCount) \(finalImportCount == 1 ? "Account" : "Accounts")")
+                    Text(buttonTitle)
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.glassProminent)
-                .disabled(finalImportCount == 0)
+                .disabled(!canImport)
             }
             .padding(18)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -384,82 +438,156 @@ struct OTPAuthImportSheet: View {
         .background(.red.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private func handleSelectedFile(_ file: PendingImportFile) {
-        password = ""
+    private func loadPickedURL(_ url: URL) {
+        activeTask?.cancel()
+        isDecrypting = true
         errorMessage = nil
-        detectedEncryptedFormat = nil
+        selectedFile = PendingImportFile(filename: url.lastPathComponent, data: Data())
 
-        switch VaultImporter.inspect(data: file.data, filenameHint: file.filename) {
-        case .plaintext:
-            selectedFile = file
-            importPlaintextFile(file)
-        case .encrypted(let formatHint):
-            selectedFile = file
-            detectedEncryptedFormat = formatHint
-        case .unsupportedEncrypted(_, let guidance):
-            selectedFile = nil
-            errorMessage = guidance
-        case .unrecognized:
-            selectedFile = nil
-            errorMessage = OTPImportError.invalidFileFormat.errorDescription
+        activeTask = Task.detached(priority: .userInitiated) {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer {
+                if scoped { url.stopAccessingSecurityScopedResource() }
+            }
+            do {
+                let values = try url.resourceValues(forKeys: [.fileSizeKey])
+                if let fileSize = values.fileSize, fileSize > VaultImporter.maxImportFileBytes {
+                    await MainActor.run {
+                        selectedFile = nil
+                        isDecrypting = false
+                        errorMessage = "Import files are limited to 20 MB."
+                    }
+                    return
+                }
+                let data = try Data(contentsOf: url)
+                try Task.checkCancellation()
+                guard data.count <= VaultImporter.maxImportFileBytes else {
+                    await MainActor.run {
+                        selectedFile = nil
+                        isDecrypting = false
+                        errorMessage = "Import files are limited to 20 MB."
+                    }
+                    return
+                }
+                let loaded = PendingImportFile(filename: url.lastPathComponent, data: data)
+                await MainActor.run {
+                    handleSelectedFile(loaded)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                await MainActor.run {
+                    selectedFile = nil
+                    isDecrypting = false
+                    errorMessage = "Couldn't read file: \(error.localizedDescription)"
+                }
+            }
         }
     }
 
-    private func importPlaintextFile(_ file: PendingImportFile) {
-        isDecrypting = true
+    private func handleSelectedFile(_ file: PendingImportFile) {
+        activeTask?.cancel()
+        password = ""
         errorMessage = nil
+        detectedEncryptedFormat = nil
+        skippedEntriesCount = 0
+        isDecrypting = true
 
         let fileData = file.data
         let filename = file.filename
 
-        Task {
-            do {
-                let result: OTPAuthImportResult = try await Task.detached(priority: .userInitiated) {
-                    try VaultImporter.importFile(data: fileData, password: nil, filenameHint: filename)
-                }.value
+        activeTask = Task.detached(priority: .userInitiated) {
+            let inspection = VaultImporter.inspect(data: fileData, filenameHint: filename)
+            if Task.isCancelled { return }
 
-                decryptedFormat = result.formatDescription
-                decryptedFolders = result.folders
-                decryptedAccounts = result.accounts
-                selectedAccountIDs = Set(result.accounts.map(\.id))
-                existingFingerprints = vault.existingFingerprints()
-                isDecrypting = false
-            } catch {
-                selectedFile = nil
-                errorMessage = error.localizedDescription
-                isDecrypting = false
+            switch inspection {
+            case .plaintext:
+                do {
+                    let result = try VaultImporter.importFile(data: fileData, password: nil, filenameHint: filename)
+                    if Task.isCancelled { return }
+                    await MainActor.run {
+                        selectedFile = file
+                        decryptedFormat = result.formatDescription
+                        decryptedFolders = result.folders
+                        decryptedAccounts = result.accounts
+                        skippedEntriesCount = result.skippedEntries
+                        selectedAccountIDs = Set(result.accounts.map(\.id))
+                        existingFingerprints = vault.existingFingerprints()
+                        hasDecodedImport = true
+                        isDecrypting = false
+                    }
+                } catch {
+                    if Task.isCancelled { return }
+                    await MainActor.run {
+                        selectedFile = nil
+                        errorMessage = error.localizedDescription
+                        isDecrypting = false
+                    }
+                }
+            case .encrypted(let formatHint):
+                await MainActor.run {
+                    selectedFile = file
+                    detectedEncryptedFormat = formatHint
+                    isDecrypting = false
+                }
+            case .unsupportedEncrypted(_, let guidance):
+                await MainActor.run {
+                    selectedFile = nil
+                    errorMessage = guidance
+                    isDecrypting = false
+                }
+            case .fileTooLarge(let msg):
+                await MainActor.run {
+                    selectedFile = nil
+                    errorMessage = msg
+                    isDecrypting = false
+                }
+            case .unrecognized:
+                await MainActor.run {
+                    selectedFile = nil
+                    errorMessage = OTPImportError.invalidFileFormat.errorDescription
+                    isDecrypting = false
+                }
             }
         }
     }
 
     private func decryptSelectedFile() {
-        guard let file = selectedFile else { return }
+        guard !isDecrypting, !password.isEmpty, let file = selectedFile else { return }
+        activeTask?.cancel()
         isDecrypting = true
         errorMessage = nil
+        skippedEntriesCount = 0
 
         let fileData = file.data
         let filename = file.filename
         let enteredPassword = password
 
-        Task {
+        activeTask = Task.detached(priority: .userInitiated) {
             do {
-                let result: OTPAuthImportResult = try await Task.detached(priority: .userInitiated) {
-                    try VaultImporter.importFile(
-                        data: fileData,
-                        password: enteredPassword,
-                        filenameHint: filename
-                    )
-                }.value
+                let result: OTPAuthImportResult = try VaultImporter.importFile(
+                    data: fileData,
+                    password: enteredPassword,
+                    filenameHint: filename
+                )
+                if Task.isCancelled { return }
 
-                decryptedFormat = result.formatDescription
-                decryptedFolders = result.folders
-                decryptedAccounts = result.accounts
-                selectedAccountIDs = Set(result.accounts.map(\.id))
-                existingFingerprints = vault.existingFingerprints()
-                isDecrypting = false
+                await MainActor.run {
+                    decryptedFormat = result.formatDescription
+                    decryptedFolders = result.folders
+                    decryptedAccounts = result.accounts
+                    skippedEntriesCount = result.skippedEntries
+                    selectedAccountIDs = Set(result.accounts.map(\.id))
+                    existingFingerprints = vault.existingFingerprints()
+                    hasDecodedImport = true
+                    isDecrypting = false
+                }
             } catch {
-                errorMessage = error.localizedDescription
-                isDecrypting = false
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isDecrypting = false
+                }
             }
         }
     }

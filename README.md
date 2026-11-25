@@ -6,13 +6,15 @@ GlassOTP is an open-source, native iOS 26+ and macOS 26+ two-factor authenticato
 
 ## Quickstart
 
-**Prerequisites:** macOS 26+ with Xcode 26+ (tested on Xcode 27.2), Swift 6.2+, an Apple Developer Team ID for device builds and iCloud Keychain sync (simulator builds work without signing), and `xcodegen` (only needed if editing `project.yml`).
+**Prerequisites:** macOS 26+ with Xcode 27.2+ (Swift 6.2+ and iOS/macOS 26+ / iOS 27 `IntentExecutionTargets` SDK), an Apple Developer Team ID for device builds and iCloud Keychain sync (simulator builds work without signing), and `xcodegen` (only needed if editing `project.yml`).
 
 Run the core Swift package unit tests:
 
 ```bash
 cd Packages/GlassOTPCore && swift test
 ```
+
+> CI on GitHub Actions runs `GlassOTPCore` unit tests and open-source secret/identifier scrubbing via [`.github/workflows/ci.yml`](.github/workflows/ci.yml); full iOS/macOS app target builds run against local Xcode 27.2+.
 
 Configure local signing (for physical iOS devices and signed macOS builds):
 
@@ -46,11 +48,11 @@ open /Applications/GlassOTP.app
 
 ## Key Capabilities
 
-- **iOS App (`GlassOTP`, iOS 26+):** Compact two-column OTP rows with live countdown rings and next-code preview on expiration, pinned favorites, folder filtering using native Liquid Glass controls (`GlassEffectContainer`, `.glassEffect`, `.buttonStyle(.glassProminent)`, `.tabBarMinimizeBehavior(.onScrollDown)`), and optional Face ID / Touch ID lock with auto-lock delay and app-switcher blur.
-- **Service Logos & Auto-Categorization:** Offline brand catalog covering 265 services (245 bundled SVG vector paths in `brand_logos.json`), optional web favicon/touch-icon lookup for unmatched domains, manual brand picker, and one-tap auto-categorization into 9 folders (`Dev & Code`, `Cloud & Infra`, `Work`, `Finance & Crypto`, `Security`, `Social & Media`, `Gaming`, `Shopping & Travel`, `Personal`).
-- **Interactive Home & Lock Screen Widgets (`GlassOTPWidgetExtension`):** Small, Medium, Large, and Lock Screen (`accessoryRectangular`, `accessoryCircular`, `accessoryInline`) widgets with per-widget account selection, live countdowns, one-tap copy with haptic feedback, optional Tap-to-Reveal (15s) privacy mode, and Universal Clipboard cross-device handoff (with an optional local-only 60s clipboard toggle in Settings).
-- **macOS Menu Bar Companion (`GlassOTPMac`, macOS 26+):** Menu bar popover (`LSUIElement`), global quick-search panel, per-account 1-keystroke global shortcuts, optional auto-type into the active field, optional live code pinned in the menu bar, Launch at Login (`SMAppService`), direct multi-format backup import, and macOS Shortcuts support (`CopyMacOTPIntent`).
-- **Storage, Sync & Backups (`GlassOTPCore`):** Zero third-party runtime dependencies. Stores accounts in the Apple Data Protection Keychain (`kSecUseDataProtectionKeychain`, `kSecAttrAccessibleAfterFirstUnlock`) with optional iCloud Keychain sync across iPhone and Mac, plus encrypted `.glassotp` backup export and import (RNCryptor v3).
+- **iOS App (`GlassOTP`, iOS 26+):** Compact two-column OTP rows with live countdown rings and next-code preview on expiration, pinned favorites, folder filtering with Liquid Glass controls (`GlassEffectContainer`, `.glassEffect`, `.buttonStyle(.glassProminent)`, `.tabBarMinimizeBehavior(.onScrollDown)`), and fail-closed Face ID / Touch ID lock that checks device authentication availability to enable and requires device-owner authentication to disable, shields presented sheets, and locks widgets behind in-app authentication.
+- **Service Logos & Auto-Categorization:** Offline brand catalog covering 265 services (245 bundled SVG vector paths in `brand_logos.json`), opt-in web logo lookup via Google Favicons (`www.google.com/s2/favicons`, redirect-restricted to Google static hosts over HTTPS port 443 and capped at 512 KiB streamed) for explicit custom domains or public issuer hostnames (no email-domain leakage), local manual brand picker, and auto-categorization into 9 folders (`Dev & Code`, `Cloud & Infra`, `Work`, `Finance & Crypto`, `Security`, `Social & Media`, `Gaming`, `Shopping & Travel`, `Personal`).
+- **Interactive Home & Lock Screen Widgets (`GlassOTPWidgetExtension`):** Small, Medium, Large, and Lock Screen (`accessoryRectangular`, `accessoryCircular`, `accessoryInline`) widgets with per-widget account selection (hidden while App Lock is enabled), live countdowns, `.privacySensitive()` redaction, authenticated copy/reveal actions (`IntentAuthenticationPolicy.requiresAuthentication`), Tap-to-Reveal (15s) privacy mode, automatic App Lock gating (tapping opens locked GlassOTP instead of background reveal/copy), and 2-minute expiring Universal Clipboard handoff (with a local-only 60s toggle in Settings).
+- **macOS Menu Bar Companion (`GlassOTPMac`, macOS 26+):** Menu bar popover (`LSUIElement`), global quick-search panel, per-account 1-keystroke global shortcuts, `postToPid` target-verified auto-type into the active app, live code and countdown pinned in the menu bar (`code • Xs`), `ConcealedType`/`TransientType` 60s auto-clearing clipboard copies, Launch at Login (`SMAppService`), direct multi-format backup import, iCloud/local Keychain storage switching, and macOS Shortcuts support (`CopyMacOTPIntent`).
+- **Storage, Sync & Backups (`GlassOTPCore`):** Zero third-party runtime dependencies. Stores accounts in Apple's Data Protection Keychain (`kSecUseDataProtectionKeychain`) with POSIX `flock` locking (serializing app and widget mutations on the same device), a `ThisDeviceOnly` local replica (`local-replica-v1`), content-addressed `ThisDeviceOnly` corrupt-replica quarantine (`local-replica-quarantine-v1.<hash>`), single-record synchronizable empty retirement records (`cloudRetiredAtMillis` / `cloudSyncGenerationMillis`), ID-retained deletion tombstones, integer-millisecond ISO-8601 serialization, and HOTP credential-generation tracking (advance any given HOTP counter on one device at a time across iPhone and Mac); `ThisDeviceOnly` local storage when iCloud sync is off; and encrypted `.glassotp` backups (`GLOTP2` using 64 MiB `scrypt` + AES-256-GCM, minimum 8-character password, plus backward-compatible `GLOTP1` `RNCryptor v3` decoding).
 
 ## Supported Import Formats
 
@@ -59,7 +61,7 @@ All exports are parsed and decrypted on-device. Unencrypted exports skip passwor
 | Source App / Format | Extensions | Encryption Supported | Folders / Flags Preserved |
 |---|---|---|---|
 | **OTP Auth** (`de.cooperrs.Authenticator`) | `.otpauthdb`, `.otpauth` | v1.0 (AES-256-CBC), v1.1+ / v1.2 (RNCryptor v3) | Folders, pinned widget slots |
-| **GlassOTP** | `.glassotp` | RNCryptor v3 | Folders, pinned flags, brands |
+| **GlassOTP** | `.glassotp` | `GLOTP2` (`scrypt` + AES-256-GCM) & `GLOTP1` (RNCryptor v3) | Folders, pinned flags, brands |
 | **Aegis Authenticator** | `.json` | Plaintext & Encrypted (`scrypt` + AES-256-GCM) | Groups (`uuid` & legacy), favorites |
 | **2FAS Authenticator** | `.2fas` | Plaintext & Encrypted (PBKDF2-SHA256 + AES-256-GCM) | Groups, favorites |
 | **Bitwarden / Vaultwarden** | `.json`, `.csv` | Unencrypted JSON & CSV | Folders, favorites |
@@ -93,7 +95,7 @@ All exports are parsed and decrypted on-device. Unencrypted exports skip passwor
 ## Building & Signing
 
 1. Copy `Config/Signing.local.xcconfig.example` to `Config/Signing.local.xcconfig` (gitignored) and set `DEVELOPMENT_TEAM = YOUR_TEAM_ID` (or pass `DEVELOPMENT_TEAM=YOUR_TEAM_ID` to `xcodebuild`).
-2. Open `GlassOTP.xcodeproj` in Xcode 26+ (or run `xcodegen generate` after changing `project.yml`).
+2. Open `GlassOTP.xcodeproj` in Xcode 27.2+ (or run `xcodegen generate` after changing `project.yml`).
 3. If building with your own bundle identifiers, align the shared entitlements across **GlassOTP**, **GlassOTPWidgetExtension**, and **GlassOTPMac**:
     - App Group (iOS app + widget): `group.com.robinvivant.glassotp` (update `GlassOTPConstants.appGroupID` in `KeychainVaultStore.swift` if changed)
     - Keychain Access Group (iOS app + widget + macOS app): `$(AppIdentifierPrefix)com.robinvivant.glassotp.shared`

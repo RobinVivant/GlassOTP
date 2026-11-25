@@ -11,6 +11,7 @@ struct BrandPickerSheet: View {
     @State private var customDomain: String
     @State private var isFetchingDomain = false
     @State private var domainError: String?
+    @State private var domainFetchTask: Task<Void, Never>?
 
     init(account: OTPAccount) {
         self.account = account
@@ -47,13 +48,21 @@ struct BrandPickerSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .onDisappear {
+                domainFetchTask?.cancel()
+                domainFetchTask = nil
+            }
         }
     }
 
     private var autoResetSection: some View {
         Button {
-            vault.updateBrandOverride(for: account, brandSlug: nil, customDomain: nil)
-            dismiss()
+            if vault.updateBrandOverride(for: account, brandSlug: nil, customDomain: nil) {
+                dismiss()
+            } else {
+                domainError = vault.alertMessage ?? "Couldn't save logo choice to Keychain."
+                vault.alertMessage = nil
+            }
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "sparkles")
@@ -114,6 +123,10 @@ struct BrandPickerSheet: View {
                 .disabled(BrandCatalog.cleanedDomain(customDomain) == nil || isFetchingDomain)
             }
 
+            Text("Downloads the site icon via Google Favicons (www.google.com).")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
             if let domainError {
                 Text(domainError)
                     .font(.caption)
@@ -125,52 +138,72 @@ struct BrandPickerSheet: View {
     }
 
     private var brandGridSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("BUNDLED VECTOR LOGOS (\(matchingBrands.count))")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 4)
+        let vectorBrands = matchingBrands.filter { $0.svgPath != nil }
+        let styleBrands = matchingBrands.filter { $0.svgPath == nil }
 
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(matchingBrands) { brand in
-                    let isSelected = account.customBrandSlug == brand.slug
-                    Button {
-                        vault.updateBrandOverride(for: account, brandSlug: brand.slug, customDomain: nil)
-                        if brand.svgPath == nil {
-                            Task {
-                                _ = await BrandLogoFetcher.fetchLogo(forDomain: brand.domain)
-                                vault.bumpLogoRevision()
-                            }
-                        }
-                        dismiss()
-                    } label: {
-                        VStack(spacing: 8) {
-                            BrandBadgeContent(
-                                brand: brand,
-                                fallbackStyle: brand.svgPath == nil ? account.brandStyle : nil,
-                                cachedDomain: brand.svgPath == nil ? brand.domain : nil,
-                                size: 46,
-                                logoRevision: vault.logoCacheRevision
-                            )
+        return VStack(alignment: .leading, spacing: 14) {
+            if !vectorBrands.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("BUNDLED VECTOR LOGOS (\(vectorBrands.count))")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
 
-                            Text(brand.title)
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                        }
-                        .padding(10)
-                        .frame(maxWidth: .infinity)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .strokeBorder(
-                                    isSelected ? Color.accentColor : Color.white.opacity(0.10),
-                                    lineWidth: isSelected ? 2 : 1
-                                )
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    brandGrid(for: vectorBrands)
                 }
+            }
+
+            if !styleBrands.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("BRAND COLORS & MONOGRAMS (LOCAL, \(styleBrands.count))")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+
+                    brandGrid(for: styleBrands)
+                }
+            }
+        }
+    }
+
+    private func brandGrid(for brands: [BrandDefinition]) -> some View {
+        LazyVGrid(columns: columns, spacing: 12) {
+            ForEach(brands) { brand in
+                let isSelected = account.customBrandSlug == brand.slug
+                Button {
+                    if vault.updateBrandOverride(for: account, brandSlug: brand.slug, customDomain: nil) {
+                        dismiss()
+                    } else {
+                        domainError = vault.alertMessage ?? "Couldn't save logo choice to Keychain."
+                        vault.alertMessage = nil
+                    }
+                } label: {
+                    VStack(spacing: 8) {
+                        BrandBadgeContent(
+                            brand: brand,
+                            fallbackStyle: brand.svgPath == nil ? account.brandStyle : nil,
+                            cachedDomain: brand.svgPath == nil ? brand.domain : nil,
+                            size: 46,
+                            logoRevision: vault.logoCacheRevision
+                        )
+
+                        Text(brand.title)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(
+                                isSelected ? Color.accentColor : Color.white.opacity(0.10),
+                                lineWidth: isSelected ? 2 : 1
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -179,14 +212,20 @@ struct BrandPickerSheet: View {
         guard let cleaned = BrandCatalog.cleanedDomain(customDomain) else { return }
         isFetchingDomain = true
         domainError = nil
-        Task {
+        domainFetchTask?.cancel()
+        domainFetchTask = Task {
             let success = await BrandLogoFetcher.fetchLogo(forDomain: cleaned)
+            guard !Task.isCancelled else { return }
             isFetchingDomain = false
             if success {
-                vault.updateBrandOverride(for: account, brandSlug: nil, customDomain: cleaned)
-                dismiss()
+                if vault.updateBrandOverride(for: account, brandSlug: nil, customDomain: cleaned) {
+                    dismiss()
+                } else {
+                    domainError = vault.alertMessage ?? "Couldn't save custom logo domain to Keychain."
+                    vault.alertMessage = nil
+                }
             } else {
-                domainError = "Couldn't find a high-resolution icon at \(cleaned)."
+                domainError = "Couldn't find a high-resolution icon for \(cleaned)."
             }
         }
     }

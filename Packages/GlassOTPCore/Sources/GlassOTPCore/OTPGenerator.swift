@@ -79,7 +79,7 @@ public enum OTPGenerator {
         }
 
         let offset = Int(lastByte & 0x0F)
-        guard offset + 3 < hmacBytes.count else {
+        guard hmacBytes.count >= 20, offset + 3 < hmacBytes.count else {
             return String(repeating: "0", count: normalizedDigits)
         }
 
@@ -90,8 +90,8 @@ public enum OTPGenerator {
             | UInt32(hmacBytes[offset + 3])
 
         let modulus = pow10(normalizedDigits)
-        let otp = truncated % modulus
-        return String(format: "%0\(normalizedDigits)u", otp)
+        let otp = UInt64(truncated) % modulus
+        return String(format: "%0\(normalizedDigits)llu", otp)
     }
 
     public static func generateTOTP(
@@ -204,8 +204,8 @@ public enum OTPGenerator {
         }
     }
 
-    private static func pow10(_ exponent: Int) -> UInt32 {
-        var result: UInt32 = 1
+    private static func pow10(_ exponent: Int) -> UInt64 {
+        var result: UInt64 = 1
         for _ in 0..<exponent {
             result &*= 10
         }

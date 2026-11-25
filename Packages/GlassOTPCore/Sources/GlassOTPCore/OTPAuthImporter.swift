@@ -4,11 +4,18 @@ public struct OTPAuthImportResult: Sendable {
     public let formatDescription: String
     public let folders: [OTPFolder]
     public let accounts: [OTPAccount]
+    public let skippedEntries: Int
 
-    public init(formatDescription: String, folders: [OTPFolder], accounts: [OTPAccount]) {
+    public init(
+        formatDescription: String,
+        folders: [OTPFolder],
+        accounts: [OTPAccount],
+        skippedEntries: Int = 0
+    ) {
         self.formatDescription = formatDescription
         self.folders = folders
         self.accounts = accounts
+        self.skippedEntries = skippedEntries
     }
 }
 
@@ -30,6 +37,9 @@ public enum OTPAuthImporter {
         password: String,
         filenameHint: String? = nil
     ) throws -> OTPAuthImportResult {
+        guard data.count <= VaultImporter.maxImportFileBytes else {
+            throw OTPImportError.corruptedArchive("Import files are limited to 20 MB.")
+        }
         guard let (format, outer) = unwrapOuterArchive(data: data, filenameHint: filenameHint) else {
             throw OTPImportError.invalidFileFormat
         }
@@ -118,6 +128,7 @@ public enum OTPAuthImporter {
         let rawFolders = innerRoot["Folders"] as? [[String: Any]] ?? []
         var importedFolders: [OTPFolder] = []
         var importedAccounts: [OTPAccount] = []
+        var skippedEntries = 0
 
         for (folderIdx, rawFolder) in rawFolders.enumerated() {
             let folderName = (rawFolder["name"] as? String)?
@@ -138,6 +149,8 @@ public enum OTPAuthImporter {
                     sortOrder: accountIdx
                 ) {
                     importedAccounts.append(account)
+                } else {
+                    skippedEntries += 1
                 }
             }
         }
@@ -145,7 +158,8 @@ public enum OTPAuthImporter {
         return OTPAuthImportResult(
             formatDescription: "OTP Auth Backup v\(formatVersionString(version))",
             folders: importedFolders,
-            accounts: importedAccounts
+            accounts: importedAccounts,
+            skippedEntries: skippedEntries
         )
     }
 
@@ -175,9 +189,11 @@ public enum OTPAuthImporter {
         }
 
         guard startsWithBinaryPlistHeader(innerData),
-              let innerRoot = (try? KeyedArchiveParser.parseRoot(from: innerData)) as? [String: Any],
-              let account = parseAccountDict(innerRoot, folderID: nil, sortOrder: 0) else {
+              let innerRoot = (try? KeyedArchiveParser.parseRoot(from: innerData)) as? [String: Any] else {
             throw OTPImportError.wrongPassword
+        }
+        guard let account = parseAccountDict(innerRoot, folderID: nil, sortOrder: 0) else {
+            throw OTPImportError.corruptedArchive("This OTP Auth account uses an unsupported algorithm or empty secret.")
         }
 
         return OTPAuthImportResult(
@@ -205,10 +221,10 @@ public enum OTPAuthImporter {
         let rawAlgo = intValue(dict["algorithm"]) ?? 1
         let algorithm: OTPAlgorithm
         switch rawAlgo {
+        case 0, 1: algorithm = .sha1
         case 2: algorithm = .sha256
         case 3: algorithm = .sha512
-        case 4: algorithm = .md5
-        default: algorithm = .sha1
+        default: return nil
         }
 
         let rawDigits = intValue(dict["digits"]) ?? 0

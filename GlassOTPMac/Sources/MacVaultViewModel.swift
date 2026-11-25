@@ -6,6 +6,31 @@ import GlassOTPCore
 import Observation
 import ServiceManagement
 
+enum MacClipboardWriter {
+    @MainActor private static var clearTask: Task<Void, Never>?
+
+    @MainActor
+    static func copyOTP(_ code: String, clearAfterSeconds: TimeInterval = 60) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        item.setString(code, forType: .string)
+        item.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+        item.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+        pasteboard.writeObjects([item])
+
+        let expectedChangeCount = pasteboard.changeCount
+        clearTask?.cancel()
+        clearTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(clearAfterSeconds))
+            guard !Task.isCancelled else { return }
+            if NSPasteboard.general.changeCount == expectedChangeCount {
+                NSPasteboard.general.clearContents()
+            }
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class MacVaultViewModel {
@@ -13,7 +38,10 @@ final class MacVaultViewModel {
         didSet { rebuildFolderLookup() }
     }
     var accounts: [OTPAccount] = [] {
-        didSet { rebuildPinnedAccounts() }
+        didSet {
+            rebuildPinnedAccounts()
+            updateMenuBarClockActive()
+        }
     }
     private(set) var pinnedAccounts: [OTPAccount] = []
     @ObservationIgnored private var folderNamesByID: [UUID: String] = [:]
@@ -25,11 +53,27 @@ final class MacVaultViewModel {
     var selectedAccountIndex: Int = 0
 
     private(set) var lastSyncDate: Date?
+    private(set) var iCloudSyncEnabled = true
+    private(set) var hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+    private(set) var hasLoadError = false
     var syncError: String?
+    private(set) var writeError: String?
+    var bannerError: String? { syncError ?? writeError }
     var alertMessage: String?
 
     var quickPickerHotKey: HotKeyCombo? {
         didSet {
+            if let picker = quickPickerHotKey {
+                let collidingIDs = accountHotKeys.filter { $0.value == picker }.map(\.key)
+                if !collidingIDs.isEmpty {
+                    var updated = accountHotKeys
+                    for id in collidingIDs {
+                        updated.removeValue(forKey: id)
+                    }
+                    accountHotKeys = updated
+                    alertMessage = "Shortcut \(picker.displayString) was reassigned to Quick Search Popover."
+                }
+            }
             persistQuickPickerHotKey()
             registerHotKeys()
         }
@@ -49,7 +93,7 @@ final class MacVaultViewModel {
             } else {
                 defaults.removeObject(forKey: Self.menuBarAccountKey)
             }
-            clock.setActive(menuBarAccountID != nil, reason: "menuBar")
+            updateMenuBarClockActive()
         }
     }
 
@@ -82,6 +126,10 @@ final class MacVaultViewModel {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var syncTask: Task<Void, Never>?
     @ObservationIgnored private var autoTypeTask: Task<Void, Never>?
+    @ObservationIgnored private var accountTombstones: [OTPTombstone] = []
+    @ObservationIgnored private var folderTombstones: [OTPTombstone] = []
+    @ObservationIgnored private var storeGeneration: UInt64 = 0
+    @ObservationIgnored private var copyRequestID: UInt64 = 0
 
     private static let quickPickerKey = "glassotp.mac.quickPickerHotKey"
     private static let accountHotKeysKey = "glassotp.mac.accountHotKeys"
@@ -91,6 +139,8 @@ final class MacVaultViewModel {
     init(store: KeychainVaultStore = .shared, defaults: UserDefaults = .standard) {
         self.store = store
         self.defaults = defaults
+        self.iCloudSyncEnabled = store.isICloudSyncEnabled()
+        self.hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
         self.quickPickerHotKey = Self.loadQuickPickerHotKey(from: defaults)
         self.accountHotKeys = Self.loadAccountHotKeys(from: defaults)
         if let idStr = defaults.string(forKey: Self.menuBarAccountKey),
@@ -102,10 +152,17 @@ final class MacVaultViewModel {
         self.autoTypeOnHotKey = defaults.bool(forKey: Self.autoTypeKey)
         self.launchAtLogin = (SMAppService.mainApp.status == .enabled)
 
-        clock.setActive(menuBarAccountID != nil, reason: "menuBar")
         reloadFromStore()
+        updateMenuBarClockActive()
         registerHotKeys()
         startSyncLoop()
+    }
+
+    private func updateMenuBarClockActive() {
+        let shouldTick = menuBarAccountID.flatMap { id in
+            accounts.first(where: { $0.id == id })
+        }.map { $0.type == .totp && $0.isSupportedAlgorithm } ?? false
+        clock.setActive(shouldTick, reason: "menuBar")
     }
 
     private var isLaunchAtLoginRegistered: Bool {
@@ -123,7 +180,12 @@ final class MacVaultViewModel {
     }
 
     private func rebuildFolderLookup() {
-        folderNamesByID = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0.name) })
+        var map: [UUID: String] = [:]
+        map.reserveCapacity(folders.count)
+        for folder in folders {
+            map[folder.id] = folder.name
+        }
+        folderNamesByID = map
     }
 
     private func rebuildPinnedAccounts() {
@@ -174,6 +236,10 @@ final class MacVaultViewModel {
     }
 
     func assignHotKey(_ combo: HotKeyCombo?, for accountID: UUID) {
+        if let combo, combo == quickPickerHotKey {
+            alertMessage = "Shortcut \(combo.displayString) is already assigned to Quick Search Popover."
+            return
+        }
         var updated = accountHotKeys
         if let combo {
             for (existingID, existingCombo) in updated where existingCombo == combo {
@@ -186,80 +252,312 @@ final class MacVaultViewModel {
         accountHotKeys = updated
     }
 
-    func reloadFromStore() {
-        do {
-            if let snapshot = try store.loadSnapshot() {
-                folders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
-                accounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
-                lastSyncDate = Date()
+    private func applyLoadedSnapshot(_ snapshot: OTPVaultSnapshot?, nonBlockingNotice: Bool = false) {
+        storeGeneration &+= 1
+        iCloudSyncEnabled = store.isICloudSyncEnabled()
+        hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+        if let snapshot {
+            let sortedFolders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
+            let sortedAccounts = snapshot.accounts.sorted { $0.sortOrder < $1.sortOrder }
+            if folders != sortedFolders {
+                folders = sortedFolders
             }
-            syncError = nil
+            if accounts != sortedAccounts {
+                accounts = sortedAccounts
+            }
+            accountTombstones = snapshot.accountTombstones
+            folderTombstones = snapshot.folderTombstones
+            if let selectedFolderID, !sortedFolders.contains(where: { $0.id == selectedFolderID }) {
+                self.selectedFolderID = nil
+            }
+            if let pinnedID = menuBarAccountID, !sortedAccounts.contains(where: { $0.id == pinnedID }) {
+                menuBarAccountID = nil
+            }
+        } else {
+            folders = []
+            accounts = []
+            accountTombstones = []
+            folderTombstones = []
+            selectedFolderID = nil
+            menuBarAccountID = nil
+        }
+        updateMenuBarClockActive()
+        lastSyncDate = Date()
+        hasLoadError = false
+        syncError = nil
+        consumePeerRetirementNoticeIfNeeded(nonBlocking: nonBlockingNotice)
+    }
+
+    private func consumePeerRetirementNoticeIfNeeded(nonBlocking: Bool = false) {
+        if store.consumePendingPeerRetirementNotice(nonBlocking: nonBlocking) {
+            alertMessage = "Another device turned off iCloud Keychain Sync and deleted the cloud copy. This Mac now stores your vault locally."
+        }
+    }
+
+    func reloadFromStore() {
+        storeGeneration &+= 1
+        do {
+            let snapshot = try store.loadSnapshot()
+            applyLoadedSnapshot(snapshot)
         } catch {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            hasLoadError = true
             syncError = error.localizedDescription
         }
     }
 
-    func persist() {
-        let snapshot = OTPVaultSnapshot(
-            schemaVersion: 1,
-            folders: folders,
-            accounts: accounts,
-            updatedAt: Date()
-        )
+    func reloadFromStoreAsync() async {
+        let store = self.store
+        let expectedGeneration = storeGeneration
         do {
-            try store.saveSnapshot(snapshot)
-            lastSyncDate = Date()
-            syncError = nil
+            let loaded = try await Task.detached(priority: .utility) {
+                try store.loadSnapshot()
+            }.value
+            guard !Task.isCancelled, storeGeneration == expectedGeneration else { return }
+            applyLoadedSnapshot(loaded)
         } catch {
+            guard !Task.isCancelled, storeGeneration == expectedGeneration else { return }
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            hasLoadError = true
             syncError = error.localizedDescription
+        }
+    }
+
+    func updateICloudSync(enabled: Bool, removeFromICloud: Bool = true) {
+        let prevSync = iCloudSyncEnabled
+        storeGeneration &+= 1
+        do {
+            let migrated = try store.setICloudSyncEnabled(enabled, removeOppositeBucket: removeFromICloud)
+            writeError = nil
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if let migrated {
+                applyLoadedSnapshot(migrated)
+            } else {
+                reloadFromStore()
+            }
+        } catch let error as KeychainVaultError {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if case .cloudCleanupFailed = error {
+                reloadFromStore()
+            } else if iCloudSyncEnabled != prevSync || hasPendingICloudCleanup {
+                reloadFromStore()
+            }
+            alertMessage = error.localizedDescription
+        } catch {
+            iCloudSyncEnabled = store.isICloudSyncEnabled()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if iCloudSyncEnabled != prevSync || hasPendingICloudCleanup {
+                reloadFromStore()
+            }
             alertMessage = error.localizedDescription
         }
     }
 
-    func copyCode(for account: OTPAccount, fromDirectHotKey: Bool = false) {
-        let now = Date()
-        let snapshot = OTPGenerator.snapshot(for: account, at: now, includeNextCode: false)
+    func retryPendingICloudCleanup() {
+        do {
+            let outcome = try store.retryPendingICloudCleanup()
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            if outcome != .nothingPending {
+                writeError = nil
+                reloadFromStore()
+            }
+            switch outcome {
+            case .nothingPending:
+                break
+            case .clearedCloudCopy:
+                alertMessage = "Deleted the leftover iCloud Keychain copy."
+            case .localCleanupOnlyPeerSuperseded:
+                alertMessage = "Finished local cleanup. Another device had already re-enabled iCloud Keychain Sync, so its cloud vault was kept."
+            case .localCleanupOnlyCloudUnverified:
+                alertMessage = "Finished local cleanup, but couldn't verify the current iCloud Keychain status."
+            }
+        } catch {
+            hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
+            alertMessage = error.localizedDescription
+        }
+    }
 
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(snapshot.code, forType: .string)
+    @discardableResult
+    func persist() -> Bool {
+        guard !hasLoadError else {
+            let message = syncError ?? "Cannot save changes because the existing Keychain vault could not be loaded."
+            alertMessage = message
+            return false
+        }
+        storeGeneration &+= 1
+        let snapshot = OTPVaultSnapshot(
+            schemaVersion: 1,
+            folders: folders,
+            accounts: accounts,
+            updatedAt: Date(),
+            accountTombstones: accountTombstones,
+            folderTombstones: folderTombstones
+        )
+        do {
+            let merged = try store.saveMergedSnapshot(snapshot)
+            writeError = nil
+            applyLoadedSnapshot(merged)
+            return true
+        } catch {
+            writeError = error.localizedDescription
+            alertMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    func copyCode(
+        for account: OTPAccount,
+        fromDirectHotKey: Bool = false,
+        surfaceExternalErrors: Bool = false,
+        capturedTargetPID: pid_t? = nil
+    ) async -> Bool {
+        await copyCode(
+            for: account.id,
+            fromDirectHotKey: fromDirectHotKey,
+            surfaceExternalErrors: surfaceExternalErrors,
+            capturedTargetPID: capturedTargetPID
+        )
+    }
+
+    @discardableResult
+    func copyCode(
+        for accountID: UUID,
+        fromDirectHotKey: Bool = false,
+        surfaceExternalErrors: Bool = false,
+        capturedTargetPID: pid_t? = nil
+    ) async -> Bool {
+        func fail(_ message: String) -> Bool {
+            if fromDirectHotKey || surfaceExternalErrors {
+                presentExternalAlert(title: "Copy Failed", message: message)
+            } else {
+                alertMessage = message
+            }
+            return false
+        }
+
+        guard !hasLoadError else {
+            return fail(syncError ?? "Cannot copy codes because the existing Keychain vault could not be loaded.")
+        }
+
+        let store = self.store
+        storeGeneration &+= 1
+        let expectedGeneration = storeGeneration
+        copyRequestID &+= 1
+        let capturedCopyRequestID = copyRequestID
+        let outcome: (snapshot: OTPVaultSnapshot?, account: OTPAccount?, didMutate: Bool)
+        let wasSupersededByStoreChange: Bool
+
+        do {
+            outcome = try await Task.detached(priority: .userInitiated) {
+                try store.resolveAccountForCopy(accountID: accountID)
+            }.value
+
+            wasSupersededByStoreChange = (storeGeneration != expectedGeneration)
+            if !wasSupersededByStoreChange {
+                if let updatedSnapshot = outcome.snapshot {
+                    if outcome.didMutate {
+                        writeError = nil
+                    }
+                    applyLoadedSnapshot(updatedSnapshot, nonBlockingNotice: !outcome.didMutate)
+                } else {
+                    guard copyRequestID == capturedCopyRequestID else {
+                        return false
+                    }
+                    reloadFromStore()
+                    return fail("That account is no longer in your vault.")
+                }
+            } else if outcome.didMutate {
+                writeError = nil
+                reloadFromStore()
+            }
+        } catch {
+            guard copyRequestID == capturedCopyRequestID else {
+                return false
+            }
+            writeError = error.localizedDescription
+            return fail(error.localizedDescription)
+        }
+
+        guard copyRequestID == capturedCopyRequestID else {
+            return false
+        }
+        guard let resolvedAccount = outcome.account else {
+            return fail("That account is no longer in your vault.")
+        }
+
+        let effectiveAccount: OTPAccount
+        if wasSupersededByStoreChange {
+            guard !hasLoadError else {
+                return fail(syncError ?? "Cannot copy codes because the existing Keychain vault could not be loaded.")
+            }
+            guard let currentAccount = accounts.first(where: { $0.id == resolvedAccount.id }) else {
+                return fail("That account is no longer in your vault.")
+            }
+            guard currentAccount.hasSameCredentialIdentity(as: resolvedAccount) else {
+                return fail("Account credentials changed. Trigger copy again for the updated code.")
+            }
+            effectiveAccount = resolvedAccount.type == .hotp ? resolvedAccount : currentAccount
+        } else {
+            effectiveAccount = resolvedAccount
+        }
+
+        guard effectiveAccount.isSupportedAlgorithm else {
+            return fail("\(effectiveAccount.displayTitle) uses legacy \(effectiveAccount.algorithm.displayName), which GlassOTP no longer generates.")
+        }
+
+        let generationDate = Date()
+        let snapshot = OTPGenerator.snapshot(for: effectiveAccount, at: generationDate, includeNextCode: false)
+        MacClipboardWriter.copyOTP(snapshot.code)
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
 
-        if account.type == .hotp,
-           let idx = accounts.firstIndex(where: { $0.id == account.id }) {
-            accounts[idx].counter &+= 1
-            accounts[idx].updatedAt = now
-            persist()
-        }
-
-        let willAutoType = fromDirectHotKey && autoTypeOnHotKey && AXIsProcessTrusted()
+        let currentFrontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let targetPID = capturedTargetPID ?? currentFrontPID
+        let willAutoType = fromDirectHotKey
+            && autoTypeOnHotKey
+            && AXIsProcessTrusted()
+            && targetPID != nil
+            && targetPID == currentFrontPID
+            && targetPID != ProcessInfo.processInfo.processIdentifier
         if willAutoType {
-            scheduleAutoType(snapshot.code)
+            scheduleAutoType(snapshot.code, targetPID: targetPID)
         }
 
-        let remaining: Int? = account.type == .totp
+        let remaining: Int? = effectiveAccount.type == .totp
             ? max(0, Int(ceil(snapshot.remainingSeconds)))
             : nil
         CopyHUDController.shared.show(
-            account: account,
+            account: effectiveAccount,
             formattedCode: snapshot.formattedCode,
             remainingSeconds: remaining,
             didAutoType: willAutoType
         )
+        return true
     }
 
     func togglePin(_ account: OTPAccount) {
+        let prevAccounts = accounts
         guard let idx = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[idx].isPinned.toggle()
-        accounts[idx].updatedAt = Date()
-        persist()
+        accounts[idx].updatedAt = Date.monotonicTimestamp(after: accounts[idx].updatedAt)
+        if !persist() {
+            accounts = prevAccounts
+        }
     }
 
     func handleAccountHotKey(_ accountID: UUID) {
-        if accounts.first(where: { $0.id == accountID }) == nil {
-            reloadFromStore()
+        let capturedTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        Task { @MainActor [weak self] in
+            _ = await self?.copyCode(
+                for: accountID,
+                fromDirectHotKey: true,
+                capturedTargetPID: capturedTargetPID
+            )
         }
-        guard let account = accounts.first(where: { $0.id == accountID }) else { return }
-        copyCode(for: account, fromDirectHotKey: true)
     }
 
     func handleIncomingURL(_ url: URL) {
@@ -268,65 +566,104 @@ final class MacVaultViewModel {
            url.host?.lowercased() == "account",
            let idString = url.pathComponents.dropFirst().first,
            let accountID = UUID(uuidString: idString) {
-            if accounts.first(where: { $0.id == accountID }) == nil {
-                reloadFromStore()
-            }
-            if let match = accounts.first(where: { $0.id == accountID }) {
-                copyCode(for: match, fromDirectHotKey: false)
+            Task { @MainActor [weak self] in
+                _ = await self?.copyCode(
+                    for: accountID,
+                    fromDirectHotKey: false,
+                    surfaceExternalErrors: true
+                )
             }
         } else if scheme == "otpauth" || scheme == "otpauth-migration" {
             do {
                 let parsed = try OTPUriParser.parse(url.absoluteString)
-                let count = importAccounts(parsed, folders: [], skipDuplicates: true)
-                alertMessage = count > 0
-                    ? "Imported \(count) account\(count == 1 ? "" : "s") into iCloud Keychain."
-                    : "Account is already in your vault."
+                let names = parsed.prefix(3).map(\.displayTitle).joined(separator: ", ")
+                let suffix = parsed.count > 3 ? ", …" : ""
+
+                let alert = NSAlert()
+                alert.messageText = "Import \(parsed.count) Account\(parsed.count == 1 ? "" : "s")?"
+                alert.informativeText = "An external link wants to add \(names)\(suffix) to your GlassOTP Keychain vault."
+                alert.addButton(withTitle: "Import")
+                alert.addButton(withTitle: "Cancel")
+                NSApp.activate(ignoringOtherApps: true)
+                guard alert.runModal() == .alertFirstButtonReturn else {
+                    return
+                }
+
+                let summary = importAccounts(parsed, folders: [], skipDuplicates: true)
+                let outcomeTitle = summary.saved ? "GlassOTP Import" : "Import Failed"
+                let outcomeText: String
+                if summary.saved {
+                    outcomeText = summary.addedCount > 0
+                        ? "Imported \(summary.addedCount) account\(summary.addedCount == 1 ? "" : "s") into Keychain."
+                        : "Account is already in your vault."
+                } else {
+                    outcomeText = alertMessage ?? "Couldn't save imported accounts to Keychain."
+                }
+                presentExternalAlert(title: outcomeTitle, message: outcomeText)
             } catch {
-                alertMessage = error.localizedDescription
+                presentExternalAlert(title: "Import Failed", message: error.localizedDescription)
             }
         }
+    }
+
+    private func presentExternalAlert(title: String, message: String) {
+        let infoAlert = NSAlert()
+        infoAlert.messageText = title
+        infoAlert.informativeText = message
+        infoAlert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        infoAlert.runModal()
+    }
+
+    struct ImportSummary {
+        let addedCount: Int
+        let addedFoldersCount: Int
+        let skippedDuplicates: Int
+        let saved: Bool
     }
 
     @discardableResult
     func importAccounts(
         _ incomingAccounts: [OTPAccount],
         folders incomingFolders: [OTPFolder],
-        skipDuplicates: Bool
-    ) -> Int {
-        var folderMap: [UUID: UUID] = [:]
-        for incomingFolder in incomingFolders {
-            if let existing = folders.first(where: {
-                $0.name.caseInsensitiveCompare(incomingFolder.name) == .orderedSame
-            }) {
-                folderMap[incomingFolder.id] = existing.id
-            } else {
-                var newFolder = incomingFolder
-                newFolder.sortOrder = folders.count
-                folders.append(newFolder)
-                folderMap[incomingFolder.id] = newFolder.id
-            }
+        skipDuplicates: Bool,
+        preserveEmptyFolders: Bool = false
+    ) -> ImportSummary {
+        let plan = VaultImportReconciler.reconcile(
+            importedAccounts: incomingAccounts,
+            importedFolders: incomingFolders,
+            existingAccounts: accounts,
+            existingFolders: folders,
+            existingAccountTombstones: accountTombstones,
+            existingFolderTombstones: folderTombstones,
+            skipDuplicates: skipDuplicates,
+            preserveEmptyFolders: preserveEmptyFolders
+        )
+        let addedFoldersCount = max(0, plan.folders.count - folders.count)
+        let foldersChanged = plan.folders != folders
+        guard plan.addedCount > 0 || (preserveEmptyFolders && foldersChanged) else {
+            return ImportSummary(
+                addedCount: 0,
+                addedFoldersCount: 0,
+                skippedDuplicates: plan.skippedDuplicateCount,
+                saved: true
+            )
         }
-
-        var seenFingerprints = Set(accounts.map(\.fingerprint))
-        var importedCount = 0
-
-        for var account in incomingAccounts {
-            if skipDuplicates && seenFingerprints.contains(account.fingerprint) {
-                continue
-            }
-            if let oldFolderID = account.folderID, let mappedFolderID = folderMap[oldFolderID] {
-                account.folderID = mappedFolderID
-            }
-            account.sortOrder = accounts.count
-            accounts.append(account)
-            seenFingerprints.insert(account.fingerprint)
-            importedCount += 1
+        let prevFolders = folders
+        let prevAccounts = accounts
+        folders = plan.folders
+        accounts = plan.accounts
+        let saved = persist()
+        if !saved {
+            folders = prevFolders
+            accounts = prevAccounts
         }
-
-        if importedCount > 0 || !incomingFolders.isEmpty {
-            persist()
-        }
-        return importedCount
+        return ImportSummary(
+            addedCount: saved ? plan.addedCount : 0,
+            addedFoldersCount: saved ? addedFoldersCount : 0,
+            skippedDuplicates: plan.skippedDuplicateCount,
+            saved: saved
+        )
     }
 
     func importBackupFile(data: Data, password: String?, filename: String) async -> Result<String, Error> {
@@ -339,18 +676,45 @@ final class MacVaultViewModel {
                 )
             }.value
 
-            let imported = importAccounts(result.accounts, folders: result.folders, skipDuplicates: true)
-            if imported == 0 {
+            let preserveEmpty = result.formatDescription == "GlassOTP Encrypted Backup"
+            let summary = importAccounts(
+                result.accounts,
+                folders: result.folders,
+                skipDuplicates: true,
+                preserveEmptyFolders: preserveEmpty
+            )
+            guard summary.saved else {
+                return .failure(NSError(
+                    domain: "GlassOTP",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: alertMessage ?? "Failed to save imported accounts to Keychain."]
+                ))
+            }
+            if summary.addedCount == 0 {
+                if summary.addedFoldersCount > 0 {
+                    let folderNoun = summary.addedFoldersCount == 1 ? "folder" : "folders"
+                    if result.accounts.isEmpty {
+                        return .success("Restored \(summary.addedFoldersCount) \(folderNoun) (\(result.formatDescription)).")
+                    }
+                    return .success("Restored \(summary.addedFoldersCount) \(folderNoun); all \(result.accounts.count) accounts were already in your vault.")
+                }
                 return .success("All \(result.accounts.count) accounts were already in your vault.")
             }
-            return .success("Imported \(imported) account\(imported == 1 ? "" : "s") (\(result.formatDescription)).")
+            if result.skippedEntries > 0 {
+                return .success("Imported \(summary.addedCount) account\(summary.addedCount == 1 ? "" : "s") (\(result.formatDescription); \(result.skippedEntries) unsupported skipped).")
+            }
+            return .success("Imported \(summary.addedCount) account\(summary.addedCount == 1 ? "" : "s") (\(result.formatDescription)).")
         } catch {
             return .failure(error)
         }
     }
 
     private func registerHotKeys() {
-        hotKeyManager.register(quickPicker: quickPickerHotKey, accountHotKeys: accountHotKeys)
+        let failed = hotKeyManager.register(quickPicker: quickPickerHotKey, accountHotKeys: accountHotKeys)
+        if !failed.isEmpty {
+            let list = failed.map(\.displayString).joined(separator: ", ")
+            alertMessage = "Shortcut \(list) is already in use by another app or system hotkey."
+        }
     }
 
     private func startSyncLoop() {
@@ -358,40 +722,64 @@ final class MacVaultViewModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(20))
                 guard !Task.isCancelled, let self else { break }
-                self.reloadFromStore()
+                await self.reloadFromStoreAsync()
             }
         }
     }
 
-    private func scheduleAutoType(_ code: String) {
+    private func scheduleAutoType(_ code: String, targetPID: pid_t?) {
+        guard let targetPID else { return }
         autoTypeTask?.cancel()
         autoTypeTask = Task {
             let modifierMask: CGEventFlags = [.maskControl, .maskAlternate, .maskCommand, .maskShift]
-            for _ in 0..<24 {
+            var modifiersReleased = false
+            for _ in 0..<100 {
                 guard !Task.isCancelled else { return }
                 let currentFlags = CGEventSource.flagsState(.hidSystemState)
                 if currentFlags.intersection(modifierMask).isEmpty {
+                    modifiersReleased = true
                     break
                 }
                 try? await Task.sleep(for: .milliseconds(15))
             }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, modifiersReleased else { return }
             guard let source = CGEventSource(stateID: .privateState) else { return }
 
             for character in code {
-                var utf16 = Array(String(character).utf16)
-                guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
-                      let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
+                guard !Task.isCancelled,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else {
+                    return
+                }
+                guard let keyCode = Self.virtualKeyCode(for: character) else { continue }
+                guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+                      let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
                     continue
                 }
                 keyDown.flags = []
                 keyUp.flags = []
+                var utf16 = Array(String(character).utf16)
                 keyDown.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
                 keyUp.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
-                keyDown.post(tap: .cghidEventTap)
-                keyUp.post(tap: .cghidEventTap)
+                keyDown.postToPid(targetPID)
+                keyUp.postToPid(targetPID)
                 try? await Task.sleep(for: .milliseconds(8))
             }
+        }
+    }
+
+    private static func virtualKeyCode(for character: Character) -> CGKeyCode? {
+        switch character {
+        case "0": CGKeyCode(kVK_ANSI_0)
+        case "1": CGKeyCode(kVK_ANSI_1)
+        case "2": CGKeyCode(kVK_ANSI_2)
+        case "3": CGKeyCode(kVK_ANSI_3)
+        case "4": CGKeyCode(kVK_ANSI_4)
+        case "5": CGKeyCode(kVK_ANSI_5)
+        case "6": CGKeyCode(kVK_ANSI_6)
+        case "7": CGKeyCode(kVK_ANSI_7)
+        case "8": CGKeyCode(kVK_ANSI_8)
+        case "9": CGKeyCode(kVK_ANSI_9)
+        default: nil
         }
     }
 
