@@ -66,7 +66,7 @@ struct SettingsView: View {
                     Button {
                         vault.showingImportSheet = true
                     } label: {
-                        Label("Import from OTP Auth (.otpauthdb)", systemImage: "square.and.arrow.down.on.square")
+                        Label("Import Backup or Export…", systemImage: "square.and.arrow.down.on.square")
                     }
 
                     Button {

@@ -37,20 +37,20 @@ struct BrandAndCategorizerTests {
     func brandMatchingAccuracy() {
         let secret = Data("secret".utf8)
         let cases: [(issuer: String, label: String, expectedSlug: String, expectedCat: OTPCategory)] = [
-            ("GitHub", "robin@gmail.com", "github", .dev),
+            ("GitHub", "alex@gmail.com", "github", .dev),
             ("Amazon Web Services", "root@prod", "amazonaws", .cloud),
             ("AWS", "admin", "amazonaws", .cloud),
-            ("Amazon", "robin@icloud.com", "amazon", .shopping),
+            ("Amazon", "alex@icloud.com", "amazon", .shopping),
             ("Google Cloud", "ops@company.com", "googlecloud", .cloud),
-            ("Google", "robin@gmail.com", "google", .personal),
+            ("Google", "alex@gmail.com", "google", .personal),
             ("Cloudflare", "dash.cloudflare.com", "cloudflare", .cloud),
             ("Microsoft Azure", "admin", "microsoftazure", .cloud),
-            ("Microsoft", "robin@outlook.com", "microsoft", .work),
+            ("Microsoft", "alex@outlook.com", "microsoft", .work),
             ("Slack", "team", "slack", .work),
             ("Discord", "gamer#0001", "discord", .social),
             ("Stripe", "finance@company.com", "stripe", .finance),
             ("1Password", "family", "1password", .security),
-            ("Proton", "robin@proton.me", "proton", .security),
+            ("Proton", "alex@proton.me", "proton", .security),
             ("Tailscale", "home-net", "tailscale", .cloud),
             ("Synology", "nas", "synology", .cloud),
             ("Revolut", "personal", "revolut", .finance),
@@ -59,7 +59,7 @@ struct BrandAndCategorizerTests {
             ("OpenAI", "platform", "openai", .dev),
             ("Anthropic", "claude.ai", "anthropic", .dev),
             ("BoursoBank", "client", "boursobank", .finance),
-            ("VERO", "robin@vero.io", "vero", .work),
+            ("Notion", "alex@example.com", "notion", .work),
         ]
 
         for item in cases {
@@ -134,7 +134,7 @@ struct BrandAndCategorizerTests {
             {
               "id": "22222222-2222-2222-2222-222222222222",
               "issuer": "GitHub",
-              "label": "robin@vero.io",
+              "label": "alex@example.com",
               "secret": "c3VwZXJzZWNyZXQ=",
               "type": "totp",
               "algorithm": "sha1",
@@ -233,7 +233,7 @@ struct BrandAndCategorizerTests {
     @Test("OTPGenerator.totpTiming and snapshot(includeNextCode: false) match full snapshot")
     func lightweightTOTPTimingMatchesSnapshot() {
         let secret = Data("JBSWY3DPEHPK3PXP".utf8)
-        let account = OTPAccount(issuer: "GitHub", label: "robin", secret: secret, period: 30)
+        let account = OTPAccount(issuer: "GitHub", label: "alex", secret: secret, period: 30)
         let testDate = Date(timeIntervalSince1970: 1_700_000_006.25)
 
         let full = OTPGenerator.snapshot(for: account, at: testDate, includeNextCode: true)

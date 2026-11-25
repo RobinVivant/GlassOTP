@@ -133,7 +133,7 @@ struct OTPCoreTests {
         let folder = OTPFolder(name: "Engineering", symbolName: "server.rack", sortOrder: 0)
         let account = OTPAccount(
             issuer: "GitHub",
-            label: "robin@example.com",
+            label: "alex@example.com",
             secret: Data("supersecretkey".utf8),
             folderID: folder.id,
             isPinned: true,
@@ -157,11 +157,86 @@ struct OTPCoreTests {
     @Test("Duplicate fingerprint detection ignores case/UUID differences while distinguishing parameters")
     func duplicateFingerprintDetection() {
         let secret = Data("sharedsecret".utf8)
-        let a = OTPAccount(issuer: "GitHub", label: "Robin@Example.com", secret: secret)
-        let b = OTPAccount(issuer: "github", label: "robin@example.com", secret: secret)
-        let c = OTPAccount(issuer: "GitHub", label: "robin@example.com", secret: secret, digits: 8)
+        let a = OTPAccount(issuer: "GitHub", label: "Alex@Example.com", secret: secret)
+        let b = OTPAccount(issuer: "github", label: "alex@example.com", secret: secret)
+        let c = OTPAccount(issuer: "GitHub", label: "alex@example.com", secret: secret, digits: 8)
 
         #expect(a.fingerprint == b.fingerprint)
         #expect(a.fingerprint != c.fingerprint)
+    }
+
+    @Test("RFC 7914 scrypt key derivation test vectors")
+    func scryptRFC7914Vectors() throws {
+        let vectors: [(password: String, salt: String, n: Int, r: Int, p: Int, expectedHex: String)] = [
+            (
+                "",
+                "",
+                16,
+                1,
+                1,
+                "77d6576238657b203b19ca42c18a0497f16b4844e3074ae8dfdffa3fede21442fcd0069ded0948f8326a753a0fc81f17e8d3e0fb2e0d3628cf35e20c38d18906"
+            ),
+            (
+                "password",
+                "NaCl",
+                1024,
+                8,
+                16,
+                "fdbabe1c9d3472007856e7190d01e9fe7c6ad7cbc8237830e77376634b3731622eaf30d92e22a3886ff109279d9830dac727afb94a83ee6d8360cbdfa2cc0640"
+            ),
+            (
+                "pleaseletmein",
+                "SodiumChloride",
+                16384,
+                8,
+                1,
+                "7023bdcb3afd7348461c06cd81fd38ebfda8fbba904f8e3ea9b543f6545da1f2d5432955613f0fcf62d49705242a9af9e61e85dc0d651e40dfcf017b45575887"
+            ),
+        ]
+
+        for vector in vectors {
+            let derived = try CryptoPrimitives.scrypt(
+                password: Data(vector.password.utf8),
+                salt: Data(vector.salt.utf8),
+                n: vector.n,
+                r: vector.r,
+                p: vector.p,
+                keyLength: 64
+            )
+            let hex = derived.map { String(format: "%02x", $0) }.joined()
+            #expect(hex == vector.expectedHex)
+        }
+    }
+
+    @Test("PBKDF2-SHA256 and AES-256-GCM encrypt/decrypt round-trip and wrong-key error")
+    func pbkdf2SHA256AndAESGCMRoundTrip() throws {
+        let key = try CryptoPrimitives.pbkdf2SHA256(
+            password: Data("correct-password".utf8),
+            salt: Data("0123456789abcdef".utf8),
+            iterations: 1000,
+            keyLength: 32
+        )
+        #expect(key.count == 32)
+
+        let nonce = Data(repeating: 0x2A, count: 12)
+        let plaintext = Data("hello-glassotp-gcm".utf8)
+        let sealed = try CryptoPrimitives.aes256GCMEncrypt(plaintext: plaintext, nonce: nonce, key: key)
+        let decrypted = try CryptoPrimitives.aes256GCMDecrypt(
+            ciphertext: sealed.ciphertext,
+            nonce: nonce,
+            tag: sealed.tag,
+            key: key
+        )
+        #expect(decrypted == plaintext)
+
+        let wrongKey = Data(repeating: 0xFF, count: 32)
+        #expect(throws: OTPImportError.wrongPassword) {
+            try CryptoPrimitives.aes256GCMDecrypt(
+                ciphertext: sealed.ciphertext,
+                nonce: nonce,
+                tag: sealed.tag,
+                key: wrongKey
+            )
+        }
     }
 }

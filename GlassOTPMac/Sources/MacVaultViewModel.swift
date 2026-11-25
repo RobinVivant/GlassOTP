@@ -329,18 +329,10 @@ final class MacVaultViewModel {
         return importedCount
     }
 
-    func importBackupFile(data: Data, password: String, filename: String) async -> Result<String, Error> {
+    func importBackupFile(data: Data, password: String?, filename: String) async -> Result<String, Error> {
         do {
             let result: OTPAuthImportResult = try await Task.detached(priority: .userInitiated) {
-                if GlassOTPBackupCodec.isGlassOTPBackup(data) {
-                    let snapshot = try GlassOTPBackupCodec.decode(data: data, password: password)
-                    return OTPAuthImportResult(
-                        formatDescription: "GlassOTP Encrypted Backup",
-                        folders: snapshot.folders,
-                        accounts: snapshot.accounts
-                    )
-                }
-                return try OTPAuthImporter.importFile(
+                try VaultImporter.importFile(
                     data: data,
                     password: password,
                     filenameHint: filename

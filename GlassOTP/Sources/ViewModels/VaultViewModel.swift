@@ -420,7 +420,7 @@ final class VaultViewModel {
         accounts = [
             OTPAccount(
                 issuer: "GitHub",
-                label: "robin@vero.io",
+                label: "alex@example.com",
                 secret: Data("JBSWY3DPEHPK3PXP".utf8),
                 folderID: defaultFolder.id,
                 isPinned: true,
@@ -428,7 +428,7 @@ final class VaultViewModel {
             ),
             OTPAccount(
                 issuer: "Cloudflare",
-                label: "infra-prod@vero.io",
+                label: "ops@example.com",
                 secret: Data("MZXW6YTBOI======".utf8),
                 folderID: defaultFolder.id,
                 isPinned: true,
@@ -447,7 +447,7 @@ final class VaultViewModel {
             ),
             OTPAccount(
                 issuer: "Google",
-                label: "robin.vivant@gmail.com",
+                label: "alex.demo@gmail.com",
                 secret: Data("KRUGS4ZANFZSAYJA".utf8),
                 folderID: defaultFolder.id,
                 isPinned: false,
@@ -463,7 +463,7 @@ final class VaultViewModel {
             ),
             OTPAccount(
                 issuer: "Stripe",
-                label: "billing@vero.io",
+                label: "billing@example.com",
                 secret: Data("JBSWY3DPEHPK3PXP".utf8),
                 folderID: defaultFolder.id,
                 isPinned: false,
@@ -471,7 +471,7 @@ final class VaultViewModel {
             ),
             OTPAccount(
                 issuer: "Discord",
-                label: "robin#0001",
+                label: "alex#0001",
                 secret: Data("MZXW6YTBOI======".utf8),
                 folderID: defaultFolder.id,
                 isPinned: false,
@@ -479,7 +479,7 @@ final class VaultViewModel {
             ),
             OTPAccount(
                 issuer: "Steam",
-                label: "rvivant",
+                label: "alexdev",
                 secret: Data("GEZDGNBVGY3TQOJQ".utf8),
                 folderID: defaultFolder.id,
                 isPinned: false,

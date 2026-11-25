@@ -72,7 +72,7 @@ public enum AccountCategorizer {
             (.cloud, ["aws", "azure", "gcp", "cloud", "nas", "synology", "proxmox", "ssh", "vpn", "dns", "unifi", "server", "vps", "host", "domain", "ovh", "hetzner", "scaleway", "tailscale", "router", "firewall", "pfsense", "truenas", "homeassistant", "home-assistant"]),
             (.finance, ["bank", "banque", "pay", "crypto", "wallet", "ledger", "kraken", "binance", "coin", "trade", "broker", "bourse", "bourso", "qonto", "revolut", "wise", "n26", "bnp", "impots", "tax", "amex", "visa", "stripe", "invest"]),
             (.security, ["1password", "bitwarden", "vault", "pass", "key", "proton", "privacy", "security", "fastmail", "tuta", "vpn", "adguard", "nextdns", "yubi", "gpg", "pgp"]),
-            (.work, ["corp", "company", "work", "office", "slack", "jira", "confluence", "notion", "sso", "okta", "hr", "swile", "alan", "vero", "ojingo", "zoom", "salesforce"]),
+            (.work, ["corp", "company", "work", "office", "slack", "jira", "confluence", "notion", "sso", "okta", "hr", "swile", "alan", "zoom", "salesforce"]),
             (.gaming, ["steam", "game", "gaming", "xbox", "playstation", "psn", "nintendo", "epic", "riot", "blizzard", "battle.net", "ubisoft", "roblox", "twitch", "minecraft"]),
             (.shopping, ["shop", "store", "amazon", "ebay", "vinted", "ikea", "air", "flight", "sncf", "train", "booking", "hotel", "uber", "deliveroo", "fnac", "leboncoin"]),
             (.social, ["social", "discord", "twitter", "reddit", "insta", "facebook", "meta", "tiktok", "spotify", "netflix", "plex", "telegram", "signal", "whatsapp", "youtube"]),

@@ -7,3 +7,13 @@ DerivedData/
 .swiftpm/
 Packages/*/.build/
 Packages/*/.swiftpm/
+Config/Signing.local.xcconfig
+*.ipa
+*.dmg
+*.xcarchive
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.cer
+.env
+.env.*

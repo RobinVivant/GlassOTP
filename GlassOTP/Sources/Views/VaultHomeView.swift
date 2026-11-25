@@ -31,7 +31,7 @@ struct VaultHomeView: View {
                     Button {
                         vault.showingImportSheet = true
                     } label: {
-                        Label("Import from OTP Auth (.otpauthdb)", systemImage: "square.and.arrow.down.on.square")
+                        Label("Import Backup or Export…", systemImage: "square.and.arrow.down.on.square")
                     }
 
                     Button {
@@ -79,7 +79,7 @@ struct VaultHomeView: View {
                     VStack(spacing: 6) {
                         Text("Welcome to GlassOTP")
                             .font(.title2.bold())
-                        Text("Bring all your existing 2FA tokens from OTP Auth in seconds — decrypted 100% locally on your iPhone and synced via iCloud Keychain.")
+                        Text("Import your 2FA tokens from OTP Auth, 2FAS, Aegis, Ente Auth, Google Authenticator, Apple Passwords, Bitwarden, 1Password, Raivo, Stratum, and more — decrypted locally and synced via iCloud Keychain.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -89,7 +89,7 @@ struct VaultHomeView: View {
                         Button {
                             vault.showingImportSheet = true
                         } label: {
-                            Label("Import from OTP Auth", systemImage: "square.and.arrow.down.on.square")
+                            Label("Import Accounts", systemImage: "square.and.arrow.down.on.square")
                                 .font(.headline)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 6)
@@ -128,11 +128,11 @@ struct VaultHomeView: View {
                 )
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Label("How to export from OTP Auth", systemImage: "info.circle.fill")
+                    Label("Supported exports & backups", systemImage: "info.circle.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.accentColor)
 
-                    Text("Open OTP Auth on your iPhone -> Settings -> Backups -> Export Encrypted Backup (.otpauthdb) -> Share directly to GlassOTP, or save to Files and pick it above. Supports both .otpauthdb and single .otpauth files.")
+                    Text("Supports encrypted Aegis (.json), 2FAS (.2fas), OTP Auth (.otpauthdb, .otpauth), and .glassotp archives alongside unencrypted JSON, Apple Passwords / Bitwarden / 1Password CSV, and Ente Auth URI lists (.txt).")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

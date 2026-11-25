@@ -86,7 +86,7 @@ struct AccountEditorSheet: View {
                     Section("Account Details") {
                         TextField("Issuer (e.g. GitHub, Cloudflare)", text: $issuer)
                             .textInputAutocapitalization(.words)
-                        TextField("Account Label (e.g. robin@vero.io)", text: $label)
+                        TextField("Account Label (e.g. alex@example.com)", text: $label)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         TextField("Base32 Secret Key", text: $base32Secret)

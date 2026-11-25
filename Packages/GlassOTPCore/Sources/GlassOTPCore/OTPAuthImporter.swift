@@ -30,17 +30,42 @@ public enum OTPAuthImporter {
         password: String,
         filenameHint: String? = nil
     ) throws -> OTPAuthImportResult {
-        guard !data.isEmpty, data.count % 16 == 0 else {
+        guard let (format, outer) = unwrapOuterArchive(data: data, filenameHint: filenameHint) else {
             throw OTPImportError.invalidFileFormat
+        }
+
+        switch format {
+        case .backupDatabase:
+            return try decodeBackupDatabase(outer: outer, password: password)
+        case .singleAccount:
+            return try decodeSingleAccount(outer: outer, password: password)
+        }
+    }
+
+    internal static func detectOuterFormat(data: Data, filenameHint: String? = nil) -> String? {
+        guard let (format, _) = unwrapOuterArchive(data: data, filenameHint: filenameHint) else {
+            return nil
+        }
+        switch format {
+        case .backupDatabase:
+            return "OTP Auth Encrypted Backup"
+        case .singleAccount:
+            return "OTP Auth Encrypted Account"
+        }
+    }
+
+    private static func unwrapOuterArchive(
+        data: Data,
+        filenameHint: String?
+    ) -> (OuterFormat, [String: Any])? {
+        guard !data.isEmpty, data.count % 16 == 0 else {
+            return nil
         }
 
         let preferSingle = filenameHint?.lowercased().hasSuffix(".otpauth") == true
         let candidateFormats: [OuterFormat] = preferSingle
             ? [.singleAccount, .backupDatabase]
             : [.backupDatabase, .singleAccount]
-
-        var matchedFormat: OuterFormat?
-        var outerArchive: [String: Any]?
 
         for format in candidateFormats {
             let outerKey = CryptoPrimitives.sha256(Data(format.keyPhrase.utf8))
@@ -54,21 +79,10 @@ public enum OTPAuthImporter {
                   rootDict["Version"] != nil else {
                 continue
             }
-            matchedFormat = format
-            outerArchive = rootDict
-            break
+            return (format, rootDict)
         }
 
-        guard let format = matchedFormat, let outer = outerArchive else {
-            throw OTPImportError.invalidFileFormat
-        }
-
-        switch format {
-        case .backupDatabase:
-            return try decodeBackupDatabase(outer: outer, password: password)
-        case .singleAccount:
-            return try decodeSingleAccount(outer: outer, password: password)
-        }
+        return nil
     }
 
     private static func decodeBackupDatabase(outer: [String: Any], password: String) throws -> OTPAuthImportResult {

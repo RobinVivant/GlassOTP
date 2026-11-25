@@ -40,7 +40,7 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                 OTPWidgetItem(
                     id: UUID(),
                     title: "GitHub",
-                    subtitle: "robin@vero.io",
+                    subtitle: "alex@example.com",
                     accentHex: "#2A3346",
                     secondaryHex: "#141A26",
                     symbolName: "chevron.left.forwardslash.chevron.right",
@@ -57,7 +57,7 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                 OTPWidgetItem(
                     id: UUID(),
                     title: "Cloudflare",
-                    subtitle: "infra@vero.io",
+                    subtitle: "ops@example.com",
                     accentHex: "#F38020",
                     secondaryHex: "#AE5C17",
                     symbolName: "bolt.shield.fill",

@@ -10,6 +10,7 @@ struct OTPAuthImportSheet: View {
     let onDismissCleanup: () -> Void
 
     @State private var selectedFile: PendingImportFile?
+    @State private var detectedEncryptedFormat: String?
     @State private var password = ""
     @State private var errorMessage: String?
     @State private var showingFilePicker = false
@@ -23,15 +24,20 @@ struct OTPAuthImportSheet: View {
     @State private var skipDuplicates = true
 
     private var allowedImportTypes: [UTType] {
-        var types: [UTType] = [.data, .item]
-        if let otpDB = UTType("de.cooperrs.otpauth.backup") {
-            types.insert(otpDB, at: 0)
+        var types: [UTType] = [.json, .commaSeparatedText, .plainText, .data, .item]
+        for identifier in [
+            "com.robinvivant.glassotp.backup",
+            "de.cooperrs.otpauth.backup",
+            "de.cooperrs.otpauth.account",
+        ] {
+            if let utType = UTType(identifier) {
+                types.insert(utType, at: 0)
+            }
         }
-        if let otpAccount = UTType("de.cooperrs.otpauth.account") {
-            types.insert(otpAccount, at: 0)
-        }
-        if let glassBackup = UTType("com.robinvivant.glassotp.backup") {
-            types.insert(glassBackup, at: 0)
+        for ext in ["2fas", "authpro"] {
+            if let utType = UTType(filenameExtension: ext) {
+                types.insert(utType, at: 0)
+            }
         }
         return types
     }
@@ -45,6 +51,8 @@ struct OTPAuthImportSheet: View {
                     VStack(spacing: 18) {
                         if !decryptedAccounts.isEmpty {
                             reviewStepView
+                        } else if isDecrypting && detectedEncryptedFormat == nil {
+                            loadingStepView
                         } else if let file = selectedFile {
                             decryptStepView(file: file)
                         } else {
@@ -54,7 +62,7 @@ struct OTPAuthImportSheet: View {
                     .padding(18)
                 }
             }
-            .navigationTitle("Import Backup")
+            .navigationTitle("Import Accounts")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -78,8 +86,7 @@ struct OTPAuthImportSheet: View {
                     }
                     do {
                         let data = try Data(contentsOf: url)
-                        selectedFile = PendingImportFile(filename: url.lastPathComponent, data: data)
-                        errorMessage = nil
+                        handleSelectedFile(PendingImportFile(filename: url.lastPathComponent, data: data))
                     } catch {
                         errorMessage = "Couldn't read file: \(error.localizedDescription)"
                     }
@@ -88,14 +95,26 @@ struct OTPAuthImportSheet: View {
                 }
             }
             .onAppear {
-                if selectedFile == nil, let initialFile {
-                    selectedFile = initialFile
+                if selectedFile == nil, decryptedAccounts.isEmpty, let initialFile {
+                    handleSelectedFile(initialFile)
                 }
             }
             .onDisappear {
                 onDismissCleanup()
             }
         }
+    }
+
+    private var loadingStepView: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+            Text("Reading \(selectedFile?.filename ?? "export")…")
+                .font(.headline)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(32)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     private var selectFileStepView: some View {
@@ -105,10 +124,10 @@ struct OTPAuthImportSheet: View {
                     .font(.system(size: 44))
                     .foregroundStyle(Color.accentColor)
 
-                Text("Import from OTP Auth")
+                Text("Import Accounts")
                     .font(.title3.bold())
 
-                Text("Select an encrypted `.otpauthdb` database backup, `.otpauth` single account export, or `.glassotp` vault archive.")
+                Text("Select an encrypted backup or export from 2FAS, Aegis, Ente Auth, Apple Passwords, Bitwarden, 1Password, Raivo, Stratum, FreeOTP+, Proton, OTP Auth, or GlassOTP.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -116,7 +135,7 @@ struct OTPAuthImportSheet: View {
                 Button {
                     showingFilePicker = true
                 } label: {
-                    Label("Choose Backup File", systemImage: "folder.badge.plus")
+                    Label("Choose File", systemImage: "folder.badge.plus")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
@@ -132,15 +151,19 @@ struct OTPAuthImportSheet: View {
             )
 
             VStack(alignment: .leading, spacing: 10) {
-                Label("Where to get your OTP Auth file", systemImage: "icloud.and.arrow.down")
+                Label("Supported formats & tips", systemImage: "checkmark.shield")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
 
-                Text("1. Open OTP Auth on your iPhone -> Settings -> Backups -> Export Encrypted Backup -> choose GlassOTP or Save to Files.")
+                Text("• **Encrypted:** Aegis (`.json`), 2FAS (`.2fas`), OTP Auth (`.otpauthdb`, `.otpauth`), Authenticator Pro legacy (`.authpro`), GlassOTP (`.glassotp`).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
-                Text("2. Or copy `Accounts.otpauthdb` from your Mac's iCloud Drive (`iCloud~de~cooperrs~Authenticator`) into iCloud Drive / Files and select it here.")
+                Text("• **JSON / CSV / URI Lists:** Aegis, 2FAS, Bitwarden, Raivo, Stratum, andOTP, FreeOTP+, Proton Authenticator, Apple Passwords, 1Password, Ente Auth (`.txt`).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Text("• **OTP Auth Tip:** Export via OTP Auth -> Settings -> Backups -> Export Encrypted Backup -> Share directly to GlassOTP or Save to Files.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -168,7 +191,7 @@ struct OTPAuthImportSheet: View {
                         Text(file.filename)
                             .font(.headline)
                             .lineLimit(1)
-                        Text("100% On-Device AES-256 Decryption • \(ByteCountFormatter.string(fromByteCount: Int64(file.data.count), countStyle: .file))")
+                        Text("\(detectedEncryptedFormat ?? "Encrypted Backup") • \(ByteCountFormatter.string(fromByteCount: Int64(file.data.count), countStyle: .file))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -177,6 +200,7 @@ struct OTPAuthImportSheet: View {
 
                     Button("Change") {
                         selectedFile = nil
+                        detectedEncryptedFormat = nil
                         password = ""
                         errorMessage = nil
                     }
@@ -360,6 +384,54 @@ struct OTPAuthImportSheet: View {
         .background(.red.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
+    private func handleSelectedFile(_ file: PendingImportFile) {
+        password = ""
+        errorMessage = nil
+        detectedEncryptedFormat = nil
+
+        switch VaultImporter.inspect(data: file.data, filenameHint: file.filename) {
+        case .plaintext:
+            selectedFile = file
+            importPlaintextFile(file)
+        case .encrypted(let formatHint):
+            selectedFile = file
+            detectedEncryptedFormat = formatHint
+        case .unsupportedEncrypted(_, let guidance):
+            selectedFile = nil
+            errorMessage = guidance
+        case .unrecognized:
+            selectedFile = nil
+            errorMessage = OTPImportError.invalidFileFormat.errorDescription
+        }
+    }
+
+    private func importPlaintextFile(_ file: PendingImportFile) {
+        isDecrypting = true
+        errorMessage = nil
+
+        let fileData = file.data
+        let filename = file.filename
+
+        Task {
+            do {
+                let result: OTPAuthImportResult = try await Task.detached(priority: .userInitiated) {
+                    try VaultImporter.importFile(data: fileData, password: nil, filenameHint: filename)
+                }.value
+
+                decryptedFormat = result.formatDescription
+                decryptedFolders = result.folders
+                decryptedAccounts = result.accounts
+                selectedAccountIDs = Set(result.accounts.map(\.id))
+                existingFingerprints = vault.existingFingerprints()
+                isDecrypting = false
+            } catch {
+                selectedFile = nil
+                errorMessage = error.localizedDescription
+                isDecrypting = false
+            }
+        }
+    }
+
     private func decryptSelectedFile() {
         guard let file = selectedFile else { return }
         isDecrypting = true
@@ -372,15 +444,7 @@ struct OTPAuthImportSheet: View {
         Task {
             do {
                 let result: OTPAuthImportResult = try await Task.detached(priority: .userInitiated) {
-                    if GlassOTPBackupCodec.isGlassOTPBackup(fileData) {
-                        let snapshot = try GlassOTPBackupCodec.decode(data: fileData, password: enteredPassword)
-                        return OTPAuthImportResult(
-                            formatDescription: "GlassOTP Encrypted Backup",
-                            folders: snapshot.folders,
-                            accounts: snapshot.accounts
-                        )
-                    }
-                    return try OTPAuthImporter.importFile(
+                    try VaultImporter.importFile(
                         data: fileData,
                         password: enteredPassword,
                         filenameHint: filename
