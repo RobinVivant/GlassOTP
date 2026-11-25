@@ -76,6 +76,8 @@ final class VaultViewModel {
         let account: OTPAccount
         let reservedHOTPCode: String?
         let reservedHOTPFormattedCode: String?
+        let expectedPostReservationCounter: UInt64?
+        let createdAt: Date
     }
 
     private let store: KeychainVaultStore
@@ -148,7 +150,7 @@ final class VaultViewModel {
         accounts.filter { $0.folderID == folderID }.count
     }
 
-    private func applySnapshotToMemory(_ snapshot: OTPVaultSnapshot) {
+    private func applySnapshotToMemory(_ snapshot: OTPVaultSnapshot, nonBlockingNotice: Bool = false) {
         storeGeneration &+= 1
         iCloudSyncEnabled = store.isICloudSyncEnabled()
         let sortedFolders = snapshot.folders.sorted { $0.sortOrder < $1.sortOrder }
@@ -166,14 +168,18 @@ final class VaultViewModel {
         }
         hasLoadError = false
         hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
-        consumePeerRetirementNoticeIfNeeded()
+        consumePeerRetirementNoticeIfNeeded(nonBlocking: nonBlockingNotice)
     }
 
-    private func consumePeerRetirementNoticeIfNeeded() {
-        if store.consumePendingPeerRetirementNotice() {
+    private func consumePeerRetirementNoticeIfNeeded(nonBlocking: Bool = false) {
+        if store.consumePendingPeerRetirementNotice(nonBlocking: nonBlocking) {
             alertMessage = "Another device turned off iCloud Keychain Sync and deleted the cloud copy. This device now stores your vault locally."
             WidgetCenter.shared.reloadAllTimelines()
         }
+    }
+
+    func clearPendingForegroundCopy() {
+        pendingForegroundCopy = nil
     }
 
     func reloadFromStore() {
@@ -298,10 +304,12 @@ final class VaultViewModel {
         guard let pending = pendingForegroundCopy else { return }
         pendingForegroundCopy = nil
         guard !hasLoadError,
+              Date().timeIntervalSince(pending.createdAt) <= 10.0,
               pending.requestID == copyRequestID,
               pending.lockEpoch == lockEpoch,
               let currentAccount = accounts.first(where: { $0.id == pending.account.id }),
               currentAccount.hasSameCredentialIdentity(as: pending.account),
+              pending.expectedPostReservationCounter == nil || currentAccount.counter == pending.expectedPostReservationCounter,
               currentAccount.isSupportedAlgorithm else {
             return
         }
@@ -364,9 +372,9 @@ final class VaultViewModel {
                         || updatedSnapshot.folders != folders
                         || store.isICloudSyncEnabled() != iCloudSyncEnabled
                         || SharedSecurityPreferences.hasPendingICloudCleanup != hasPendingICloudCleanup {
-                        applySnapshotToMemory(updatedSnapshot)
+                        applySnapshotToMemory(updatedSnapshot, nonBlockingNotice: !outcome.didMutate)
                     } else {
-                        consumePeerRetirementNoticeIfNeeded()
+                        consumePeerRetirementNoticeIfNeeded(nonBlocking: !outcome.didMutate)
                     }
                 } else {
                     guard copyRequestID == capturedCopyRequestID, lockEpoch == capturedLockEpoch else {
@@ -423,7 +431,9 @@ final class VaultViewModel {
                     lockEpoch: capturedLockEpoch,
                     account: effectiveAccount,
                     reservedHOTPCode: effectiveAccount.type == .hotp ? snapshot.code : nil,
-                    reservedHOTPFormattedCode: effectiveAccount.type == .hotp ? snapshot.formattedCode : nil
+                    reservedHOTPFormattedCode: effectiveAccount.type == .hotp ? snapshot.formattedCode : nil,
+                    expectedPostReservationCounter: effectiveAccount.type == .hotp ? (effectiveAccount.counter &+ 1) : nil,
+                    createdAt: Date()
                 )
             }
 

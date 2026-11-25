@@ -195,6 +195,28 @@ struct MenuBarPopoverView: View {
                 }
             }
 
+            if !vault.accounts.isEmpty, let syncError = vault.syncError {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    Text(syncError)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Refresh") {
+                        vault.reloadFromStore()
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .buttonStyle(.borderless)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(.horizontal, 12)
+            }
+
             if vault.accounts.isEmpty {
                 emptyVaultView
             } else if displayed.isEmpty {
@@ -373,6 +395,26 @@ struct MenuBarPopoverView: View {
     private var settingsContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                if let syncError = vault.syncError {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                        Text(syncError)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        Button("Refresh") {
+                            vault.reloadFromStore()
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(10)
+                    .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text("GLOBAL SHORTCUTS")
                         .font(.caption2.weight(.bold))

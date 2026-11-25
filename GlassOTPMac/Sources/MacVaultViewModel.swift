@@ -250,7 +250,7 @@ final class MacVaultViewModel {
         accountHotKeys = updated
     }
 
-    private func applyLoadedSnapshot(_ snapshot: OTPVaultSnapshot?) {
+    private func applyLoadedSnapshot(_ snapshot: OTPVaultSnapshot?, nonBlockingNotice: Bool = false) {
         storeGeneration &+= 1
         iCloudSyncEnabled = store.isICloudSyncEnabled()
         hasPendingICloudCleanup = SharedSecurityPreferences.hasPendingICloudCleanup
@@ -283,11 +283,11 @@ final class MacVaultViewModel {
         lastSyncDate = Date()
         hasLoadError = false
         syncError = nil
-        consumePeerRetirementNoticeIfNeeded()
+        consumePeerRetirementNoticeIfNeeded(nonBlocking: nonBlockingNotice)
     }
 
-    private func consumePeerRetirementNoticeIfNeeded() {
-        if store.consumePendingPeerRetirementNotice() {
+    private func consumePeerRetirementNoticeIfNeeded(nonBlocking: Bool = false) {
+        if store.consumePendingPeerRetirementNotice(nonBlocking: nonBlocking) {
             alertMessage = "Another device turned off iCloud Keychain Sync and deleted the cloud copy. This Mac now stores your vault locally."
         }
     }
@@ -380,8 +380,7 @@ final class MacVaultViewModel {
     @discardableResult
     func persist() -> Bool {
         guard !hasLoadError else {
-            let message = "Cannot save changes because the existing Keychain vault could not be loaded."
-            syncError = message
+            let message = syncError ?? "Cannot save changes because the existing Keychain vault could not be loaded."
             alertMessage = message
             return false
         }
@@ -437,7 +436,7 @@ final class MacVaultViewModel {
         }
 
         guard !hasLoadError else {
-            return fail("Cannot copy codes because the existing Keychain vault could not be loaded.")
+            return fail(syncError ?? "Cannot copy codes because the existing Keychain vault could not be loaded.")
         }
 
         let store = self.store
@@ -456,7 +455,7 @@ final class MacVaultViewModel {
             wasSupersededByStoreChange = (storeGeneration != expectedGeneration)
             if !wasSupersededByStoreChange {
                 if let updatedSnapshot = outcome.snapshot {
-                    applyLoadedSnapshot(updatedSnapshot)
+                    applyLoadedSnapshot(updatedSnapshot, nonBlockingNotice: !outcome.didMutate)
                 } else {
                     guard copyRequestID == capturedCopyRequestID else {
                         return false
@@ -485,7 +484,7 @@ final class MacVaultViewModel {
         let effectiveAccount: OTPAccount
         if wasSupersededByStoreChange {
             guard !hasLoadError else {
-                return fail("Cannot copy codes because the existing Keychain vault could not be loaded.")
+                return fail(syncError ?? "Cannot copy codes because the existing Keychain vault could not be loaded.")
             }
             guard let currentAccount = accounts.first(where: { $0.id == resolvedAccount.id }) else {
                 return fail("That account is no longer in your vault.")

@@ -123,6 +123,7 @@ struct GlassOTPApp: App {
                         vault.processPendingIncomingURLIfUnlocked(isLocked: false)
                     }
                 } else if newPhase == .background {
+                    vault.clearPendingForegroundCopy()
                     vault.purgeStaleInboxFiles()
                 }
             }

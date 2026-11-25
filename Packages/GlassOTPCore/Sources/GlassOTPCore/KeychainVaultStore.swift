@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import Security
@@ -8,6 +9,7 @@ public enum GlassOTPConstants {
     public static let keychainAccount = "primary-vault-v1"
     public static let keychainLocalReplicaAccount = "local-replica-v1"
     public static let keychainLocalReplicaQuarantineAccount = "local-replica-quarantine-v1"
+    public static let keychainLocalReplicaQuarantinePrefix = "local-replica-quarantine-v1."
     internal static let legacySyncMarkerAccount = "icloud-sync-marker-v1"
     public static let keychainAccessGroupSuffix = "com.robinvivant.glassotp.shared"
     public static let iCloudSyncPreferenceKey = "glassotp.icloud.sync.enabled"
@@ -19,6 +21,7 @@ public enum GlassOTPConstants {
     public static let cloudCleanupSupersededByPeerKey = "glassotp.icloud.cleanupSupersededByPeer"
     public static let pendingPeerRetirementNoticeKey = "glassotp.icloud.pendingPeerRetirementNotice"
     public static let pendingMainAppLegacyRetirementRecoveryKey = "glassotp.keychain.pendingMainAppLegacyRetirementRecovery"
+    public static let quarantinedReplicaAccountsKey = "glassotp.keychain.quarantinedReplicaAccounts"
     public static let legacyMigrationCheckedKey = "glassotp.keychain.legacyMigrationChecked"
     public static let pendingLegacyMigrationKeyPrefix = "glassotp.keychain.pendingLegacyDelete"
 }
@@ -155,6 +158,7 @@ public enum KeychainVaultError: Error, LocalizedError, Sendable, Equatable {
     case unexpectedStatus(OSStatus)
     case decodingFailed
     case unreadableCloudVault
+    case unreadableCloudVaultDuringCleanup
     case unreadableLocalReplica
     case cloudCleanupFailed(OSStatus)
     case lockUnavailable
@@ -164,9 +168,11 @@ public enum KeychainVaultError: Error, LocalizedError, Sendable, Equatable {
         case .unexpectedStatus(let status):
             "Keychain error (\(status))."
         case .decodingFailed:
-            "Stored vault data could not be decoded. Update GlassOTP on this device or restore from an encrypted backup."
+            "Stored local vault data could not be decoded by this version of GlassOTP. Update GlassOTP on this device, or restore your encrypted backup on a clean installation or another device."
         case .unreadableCloudVault:
             "The iCloud Keychain vault could not be decoded by this version of GlassOTP. Update GlassOTP on this device, or turn off iCloud Keychain Sync using \"Use Local-Only & Keep iCloud Copy\" in Settings."
+        case .unreadableCloudVaultDuringCleanup:
+            "Local cleanup is waiting because the iCloud Keychain copy could not be decoded by this version of GlassOTP. Update GlassOTP on this device and retry."
         case .unreadableLocalReplica:
             "Your local sync replica could not be decoded. Update GlassOTP on this device, or if a readable vault is available, turn iCloud Keychain Sync off and back on in Settings to rebuild it."
         case .cloudCleanupFailed(let status):
@@ -180,6 +186,7 @@ public enum KeychainVaultError: Error, LocalizedError, Sendable, Equatable {
 internal protocol KeychainBackend: Sendable {
     func resolvedAccessGroup() -> String?
     func read(account: String, synchronizable: Bool, accessGroup: String?) -> (status: OSStatus, data: Data?, actualAccessGroup: String?)
+    func readAll(account: String, synchronizable: Bool) -> (status: OSStatus, items: [(data: Data, actualAccessGroup: String?)])
     func upsert(data: Data, account: String, synchronizable: Bool, accessGroup: String?, accessibility: CFString) -> OSStatus
     func delete(account: String, synchronizable: Bool, accessGroup: String?) -> OSStatus
 }
@@ -233,6 +240,32 @@ private struct SystemKeychainBackend: KeychainBackend {
             return (status, data, accessGroup)
         }
         return (errSecDecode, nil, nil)
+    }
+
+    func readAll(account: String, synchronizable: Bool) -> (status: OSStatus, items: [(data: Data, actualAccessGroup: String?)]) {
+        var query = baseQuery(account: account, synchronizable: synchronizable, accessGroup: nil)
+        query[kSecReturnData as String] = kCFBooleanTrue
+        query[kSecReturnAttributes as String] = kCFBooleanTrue
+        query[kSecMatchLimit as String] = kSecMatchLimitAll
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess else {
+            return (status, [])
+        }
+        var results: [(data: Data, actualAccessGroup: String?)] = []
+        if let dicts = item as? [[String: Any]] {
+            for dict in dicts {
+                if let data = dict[kSecValueData as String] as? Data {
+                    results.append((data, dict[kSecAttrAccessGroup as String] as? String))
+                }
+            }
+        } else if let dict = item as? [String: Any],
+                  let data = dict[kSecValueData as String] as? Data {
+            results.append((data, dict[kSecAttrAccessGroup as String] as? String))
+        } else {
+            return (errSecDecode, [])
+        }
+        return (errSecSuccess, results)
     }
 
     func upsert(data: Data, account: String, synchronizable: Bool, accessGroup: String?, accessibility: CFString) -> OSStatus {
@@ -314,12 +347,21 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
     }
 
     public func isICloudSyncEnabled() -> Bool {
-        lock.withLock { isICloudSyncEnabledUnlocked() }
+        isICloudSyncEnabledReadOnly()
     }
 
     @discardableResult
-    public func consumePendingPeerRetirementNotice() -> Bool {
-        lock.withLock {
+    public func consumePendingPeerRetirementNotice(nonBlocking: Bool = false) -> Bool {
+        if nonBlocking {
+            guard lock.try() else { return false }
+            defer { lock.unlock() }
+            guard defaults.bool(forKey: GlassOTPConstants.pendingPeerRetirementNoticeKey) else {
+                return false
+            }
+            defaults.removeObject(forKey: GlassOTPConstants.pendingPeerRetirementNoticeKey)
+            return true
+        }
+        return lock.withLock {
             guard defaults.bool(forKey: GlassOTPConstants.pendingPeerRetirementNoticeKey) else {
                 return false
             }
@@ -336,28 +378,89 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
         try setICloudSyncEnabled(enabled, removeOppositeBucket: true)
     }
 
-    private func readPendingLegacySyncDataReadOnly() throws -> Data? {
-        guard !isAppExtension, let group = backend.resolvedAccessGroup() else {
-            return nil
-        }
-        let pendingKey = pendingLegacyMigrationKey(group: group, synchronizable: true)
-        guard let pendingLegacyGroup = processDefaults.string(forKey: pendingKey),
-              !pendingLegacyGroup.isEmpty,
-              pendingLegacyGroup != group else {
-            return nil
-        }
-        let legacyRead = backend.read(
-            account: GlassOTPConstants.keychainAccount,
-            synchronizable: true,
-            accessGroup: pendingLegacyGroup
-        )
-        switch legacyRead.status {
+    private func discoverLegacyItemsReadOnly(
+        account: String,
+        synchronizable: Bool,
+        sharedGroup: String
+    ) throws -> [(group: String, data: Data)] {
+        let result = backend.readAll(account: account, synchronizable: synchronizable)
+        switch result.status {
+        case errSecItemNotFound, errSecMissingEntitlement:
+            return []
         case errSecSuccess:
-            return legacyRead.data
-        case errSecItemNotFound:
-            return nil
+            var seen: Set<String> = []
+            var legacy: [(group: String, data: Data)] = []
+            for item in result.items {
+                guard let actual = item.actualAccessGroup,
+                      !actual.isEmpty,
+                      actual != sharedGroup,
+                      seen.insert(actual).inserted else {
+                    continue
+                }
+                legacy.append((group: actual, data: item.data))
+            }
+            return legacy
         default:
-            throw KeychainVaultError.unexpectedStatus(legacyRead.status)
+            throw KeychainVaultError.unexpectedStatus(result.status)
+        }
+    }
+
+    private func readLegacySyncDiscoveryReadOnly() throws -> [(group: String, data: Data)] {
+        guard !isAppExtension, let group = backend.resolvedAccessGroup() else {
+            return []
+        }
+        var results: [(group: String, data: Data)] = []
+        var seenGroups: Set<String> = []
+        let pendingKey = pendingLegacyMigrationKey(group: group, synchronizable: true)
+        if let pendingLegacyGroup = processDefaults.string(forKey: pendingKey),
+           !pendingLegacyGroup.isEmpty,
+           pendingLegacyGroup != group {
+            let legacyRead = backend.read(
+                account: GlassOTPConstants.keychainAccount,
+                synchronizable: true,
+                accessGroup: pendingLegacyGroup
+            )
+            switch legacyRead.status {
+            case errSecSuccess:
+                if let data = legacyRead.data {
+                    seenGroups.insert(pendingLegacyGroup)
+                    results.append((group: pendingLegacyGroup, data: data))
+                }
+            case errSecItemNotFound:
+                break
+            default:
+                throw KeychainVaultError.unexpectedStatus(legacyRead.status)
+            }
+        }
+        let syncCheckedKey = "\(GlassOTPConstants.legacyMigrationCheckedKey).\(group).sync"
+        if !processDefaults.bool(forKey: syncCheckedKey) {
+            let discovered = try discoverLegacyItemsReadOnly(
+                account: GlassOTPConstants.keychainAccount,
+                synchronizable: true,
+                sharedGroup: group
+            )
+            for item in discovered where seenGroups.insert(item.group).inserted {
+                results.append(item)
+            }
+        }
+        return results
+    }
+
+    private func quarantineUnreadableReplicaUnlocked(_ rawReplica: Data) throws {
+        let digest = SHA256.hash(data: rawReplica).prefix(8).map { String(format: "%02x", $0) }.joined()
+        let quarantineAccount = GlassOTPConstants.keychainLocalReplicaQuarantinePrefix + digest
+        let existing = readKeychainDataWithStatus(account: quarantineAccount, synchronizable: false)
+        if existing.status != errSecSuccess || existing.data != rawReplica {
+            _ = try writeAndVerifyKeychainData(
+                rawReplica,
+                account: quarantineAccount,
+                synchronizable: false
+            )
+        }
+        var recorded = defaults.stringArray(forKey: GlassOTPConstants.quarantinedReplicaAccountsKey) ?? []
+        if !recorded.contains(quarantineAccount) {
+            recorded.append(quarantineAccount)
+            defaults.set(recorded, forKey: GlassOTPConstants.quarantinedReplicaAccountsKey)
         }
     }
 
@@ -369,7 +472,7 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
                 synchronizable: true,
                 canMutate: enabled
             )
-            let legacySyncData = enabled ? nil : try readPendingLegacySyncDataReadOnly()
+            let legacySyncEntries = enabled ? [] : try readLegacySyncDiscoveryReadOnly()
             let localData = try readKeychainData(
                 account: GlassOTPConstants.keychainAccount,
                 synchronizable: false,
@@ -395,31 +498,30 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
             } else {
                 syncSnapshot = syncData.flatMap { try? decodeSnapshot($0) }
             }
-            let legacySyncSnapshot = legacySyncData.flatMap { try? decodeSnapshot($0) }
+            let legacySyncSnapshots = legacySyncEntries.compactMap { try? decodeSnapshot($0.data) }
             let localSnapshot = try localData.map(decodeSnapshot)
             let replicaSnapshot = replicaData.flatMap { try? decodeSnapshot($0) }
             let syncCorrupt = (syncData != nil && syncSnapshot == nil)
-            let legacySyncCorrupt = (legacySyncData != nil && legacySyncSnapshot == nil)
+            let legacySyncCorrupt = legacySyncEntries.contains { (try? decodeSnapshot($0.data)) == nil }
             let replicaCorrupt = (replicaData != nil && replicaSnapshot == nil)
 
             var combined: OTPVaultSnapshot?
-            let rawCandidates: [OTPVaultSnapshot?] = [syncSnapshot, legacySyncSnapshot, replicaSnapshot, localSnapshot]
+            let rawCandidates: [OTPVaultSnapshot?] = [syncSnapshot] + legacySyncSnapshots.map { Optional($0) } + [replicaSnapshot, localSnapshot]
             for case let candidate? in rawCandidates where candidate.cloudRetiredAtMillis == nil {
                 combined = combined?.merged(with: candidate, tombstoneLimit: nil) ?? candidate
             }
 
             let savedRetireGen = (defaults.object(forKey: GlassOTPConstants.lastCloudRetirementGenerationKey) as? NSNumber)?.int64Value ?? 0
-            let maxObservedGen = [
+            let maxObservedGen = ([
                 savedRetireGen,
                 syncSnapshot?.cloudSyncGenerationMillis,
                 syncSnapshot?.cloudRetiredAtMillis,
-                legacySyncSnapshot?.cloudSyncGenerationMillis,
-                legacySyncSnapshot?.cloudRetiredAtMillis,
                 localSnapshot?.cloudSyncGenerationMillis,
                 localSnapshot?.cloudRetiredAtMillis,
                 replicaSnapshot?.cloudSyncGenerationMillis,
                 replicaSnapshot?.cloudRetiredAtMillis,
-            ].compactMap { $0 }.max() ?? 0
+            ] + legacySyncSnapshots.map(\.cloudSyncGenerationMillis) + legacySyncSnapshots.map(\.cloudRetiredAtMillis))
+                .compactMap { $0 }.max() ?? 0
 
             if enabled {
                 if replicaCorrupt {
@@ -427,11 +529,7 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
                         throw KeychainVaultError.unreadableLocalReplica
                     }
                     if let rawReplica = replicaData {
-                        _ = try writeAndVerifyKeychainData(
-                            rawReplica,
-                            account: GlassOTPConstants.keychainLocalReplicaQuarantineAccount,
-                            synchronizable: false
-                        )
+                        try quarantineUnreadableReplicaUnlocked(rawReplica)
                     }
                 }
 
@@ -489,6 +587,13 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
                 }
 
                 if removeOppositeBucket {
+                    if !isAppExtension, let group = backend.resolvedAccessGroup() {
+                        let pendingKey = pendingLegacyMigrationKey(group: group, synchronizable: true)
+                        if (processDefaults.string(forKey: pendingKey) ?? "").isEmpty,
+                           let firstLegacy = legacySyncEntries.first {
+                            processDefaults.set(firstLegacy.group, forKey: pendingKey)
+                        }
+                    }
                     let retirementGen = max(Date().roundedEpochMillis, maxObservedGen + 1)
                     // Persist retirement state BEFORE mutating sync preference or performing fallible cleanup
                     defaults.set(retirementGen, forKey: GlassOTPConstants.lastCloudRetirementGenerationKey)
@@ -544,10 +649,14 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
                 return try performCloudRetirementCleanupUnlocked(retirementGeneration: effectiveGen)
             } catch let error as KeychainVaultError {
                 defaults.set(true, forKey: GlassOTPConstants.pendingICloudDeletePreferenceKey)
-                if case .unexpectedStatus(let status) = error {
+                switch error {
+                case .unexpectedStatus(let status):
                     throw KeychainVaultError.cloudCleanupFailed(status)
+                case .unreadableCloudVault:
+                    throw KeychainVaultError.unreadableCloudVaultDuringCleanup
+                default:
+                    throw error
                 }
-                throw error
             }
         }
     }
@@ -707,16 +816,35 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
 
         if let group = backend.resolvedAccessGroup(), !isAppExtension {
             let pendingKey = pendingLegacyMigrationKey(group: group, synchronizable: true)
+            let syncCheckedKey = "\(GlassOTPConstants.legacyMigrationCheckedKey).\(group).sync"
+            var handledGroups: Set<String> = []
             if let pendingLegacyGroup = processDefaults.string(forKey: pendingKey),
                !pendingLegacyGroup.isEmpty,
                pendingLegacyGroup != group {
+                handledGroups.insert(pendingLegacyGroup)
                 _ = try mergeAndDeletePendingLegacySyncToLocalUnlocked(
                     legacyGroup: pendingLegacyGroup,
                     group: group,
                     pendingKey: pendingKey
                 )
-                defaults.removeObject(forKey: GlassOTPConstants.pendingMainAppLegacyRetirementRecoveryKey)
-            } else if defaults.bool(forKey: GlassOTPConstants.pendingMainAppLegacyRetirementRecoveryKey) {
+            }
+            if !processDefaults.bool(forKey: syncCheckedKey) {
+                let remaining = try discoverLegacyItemsReadOnly(
+                    account: GlassOTPConstants.keychainAccount,
+                    synchronizable: true,
+                    sharedGroup: group
+                )
+                for item in remaining where handledGroups.insert(item.group).inserted {
+                    processDefaults.set(item.group, forKey: pendingKey)
+                    _ = try mergeAndDeletePendingLegacySyncToLocalUnlocked(
+                        legacyGroup: item.group,
+                        group: group,
+                        pendingKey: pendingKey
+                    )
+                }
+                processDefaults.set(true, forKey: syncCheckedKey)
+            }
+            if defaults.bool(forKey: GlassOTPConstants.pendingMainAppLegacyRetirementRecoveryKey) {
                 _ = try recoverPendingLegacySyncOnLocalLoadUnlocked()
             }
         }
@@ -851,8 +979,13 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
     }
 
     public func resolveAccountForCopy(accountID: UUID) throws -> (snapshot: OTPVaultSnapshot?, account: OTPAccount?, didMutate: Bool) {
-        let displaySnapshot = try withVaultLock(isMutating: false, nonBlocking: true) { hasLock in
-            try loadSnapshotUnlocked(canMutate: hasLock, forMutation: false)
+        var hadLock = false
+        var displaySnapshot = try withVaultLock(isMutating: false, nonBlocking: true) { hasLock in
+            hadLock = hasLock
+            return try loadSnapshotUnlocked(canMutate: hasLock, forMutation: false)
+        }
+        if displaySnapshot == nil && !hadLock {
+            displaySnapshot = try loadSnapshot()
         }
         guard let snapshot = displaySnapshot,
               let account = snapshot.accounts.first(where: { $0.id == accountID }) else {
@@ -1077,44 +1210,161 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
         guard !isAppExtension, let group = backend.resolvedAccessGroup() else {
             return nil
         }
-        let pendingKey = pendingLegacyMigrationKey(group: group, synchronizable: true)
-        let syncCheckedKey = "\(GlassOTPConstants.legacyMigrationCheckedKey).\(group).sync"
-        let needsWidgetRecovery = defaults.bool(forKey: GlassOTPConstants.pendingMainAppLegacyRetirementRecoveryKey)
-
-        var targetLegacyGroup: String?
-        if let savedLegacy = processDefaults.string(forKey: pendingKey),
-           !savedLegacy.isEmpty,
-           savedLegacy != group {
-            targetLegacyGroup = savedLegacy
-        } else if needsWidgetRecovery && !processDefaults.bool(forKey: syncCheckedKey) {
-            let legacy = backend.read(account: GlassOTPConstants.keychainAccount, synchronizable: true, accessGroup: nil)
-            if legacy.status == errSecSuccess,
-               let actualGroup = legacy.actualAccessGroup,
-               !actualGroup.isEmpty,
-               actualGroup != group {
-                processDefaults.set(actualGroup, forKey: pendingKey)
-                targetLegacyGroup = actualGroup
-            } else if legacy.status != errSecSuccess
-                        && legacy.status != errSecItemNotFound
-                        && legacy.status != errSecMissingEntitlement {
-                throw KeychainVaultError.unexpectedStatus(legacy.status)
-            }
-        }
-
-        guard let legacyGroup = targetLegacyGroup else {
-            if needsWidgetRecovery {
-                defaults.removeObject(forKey: GlassOTPConstants.pendingMainAppLegacyRetirementRecoveryKey)
-            }
+        guard defaults.bool(forKey: GlassOTPConstants.pendingMainAppLegacyRetirementRecoveryKey) else {
             return nil
         }
 
-        let recovered = try mergeAndDeletePendingLegacySyncToLocalUnlocked(
-            legacyGroup: legacyGroup,
-            group: group,
-            pendingKey: pendingKey
-        )
+        var latestRecoveredSnapshot: OTPVaultSnapshot?
+
+        // Step A: Recover any pending/unmigrated legacy device-only vault (even if widget already wrote shared local)
+        let localPendingKey = pendingLegacyMigrationKey(group: group, synchronizable: false)
+        let localCheckedKey = "\(GlassOTPConstants.legacyMigrationCheckedKey).\(group).local"
+        var localGroups: [String] = []
+        var seenLocalGroups: Set<String> = []
+        if let savedLocalLegacy = processDefaults.string(forKey: localPendingKey),
+           !savedLocalLegacy.isEmpty,
+           savedLocalLegacy != group,
+           seenLocalGroups.insert(savedLocalLegacy).inserted {
+            localGroups.append(savedLocalLegacy)
+        }
+        if !processDefaults.bool(forKey: localCheckedKey) {
+            let discoveredLocal = try discoverLegacyItemsReadOnly(
+                account: GlassOTPConstants.keychainAccount,
+                synchronizable: false,
+                sharedGroup: group
+            )
+            for item in discoveredLocal where seenLocalGroups.insert(item.group).inserted {
+                localGroups.append(item.group)
+            }
+        }
+
+        for legacyLocalGroup in localGroups {
+            processDefaults.set(legacyLocalGroup, forKey: localPendingKey)
+            let legacyRead = backend.read(
+                account: GlassOTPConstants.keychainAccount,
+                synchronizable: false,
+                accessGroup: legacyLocalGroup
+            )
+            var expectedLocalData: Data?
+            switch legacyRead.status {
+            case errSecItemNotFound:
+                break
+            case errSecSuccess:
+                guard let legacyData = legacyRead.data else {
+                    throw KeychainVaultError.decodingFailed
+                }
+                let legacySnap = try decodeSnapshot(legacyData)
+                if legacySnap.cloudRetiredAtMillis == nil {
+                    let sharedRead = backend.read(
+                        account: GlassOTPConstants.keychainAccount,
+                        synchronizable: false,
+                        accessGroup: group
+                    )
+                    let sharedExisting: OTPVaultSnapshot?
+                    switch sharedRead.status {
+                    case errSecSuccess:
+                        sharedExisting = try sharedRead.data.map(decodeSnapshot)
+                    case errSecItemNotFound:
+                        sharedExisting = nil
+                    default:
+                        throw KeychainVaultError.unexpectedStatus(sharedRead.status)
+                    }
+                    let existingReplica = try readKeychainData(
+                        account: GlassOTPConstants.keychainLocalReplicaAccount,
+                        synchronizable: false,
+                        canMutate: false
+                    ).flatMap { try? decodeSnapshot($0) }
+                    var mergedLocal: OTPVaultSnapshot?
+                    for case let candidate? in [legacySnap, sharedExisting, existingReplica] where candidate.cloudRetiredAtMillis == nil {
+                        mergedLocal = mergedLocal?.merged(with: candidate, tombstoneLimit: nil) ?? candidate
+                    }
+                    if var localToSave = mergedLocal {
+                        localToSave.cloudRetiredAtMillis = nil
+                        let mergedData = try encodeSnapshot(localToSave)
+                        let stored = try writeAndVerifyKeychainData(
+                            mergedData,
+                            account: GlassOTPConstants.keychainAccount,
+                            synchronizable: false
+                        )
+                        #if targetEnvironment(simulator)
+                        if !stored {
+                            try writeSimulatorFallback(mergedData)
+                        } else {
+                            try? FileManager.default.removeItem(at: simulatorFallbackURL())
+                        }
+                        #else
+                        _ = stored
+                        #endif
+                        expectedLocalData = mergedData
+                        latestRecoveredSnapshot = try decodeSnapshot(mergedData)
+                    }
+                }
+            default:
+                throw KeychainVaultError.unexpectedStatus(legacyRead.status)
+            }
+
+            let deleteStatus = backend.delete(
+                account: GlassOTPConstants.keychainAccount,
+                synchronizable: false,
+                accessGroup: legacyLocalGroup
+            )
+            guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+                throw KeychainVaultError.unexpectedStatus(deleteStatus)
+            }
+            if let expectedLocalData {
+                let verify = backend.read(
+                    account: GlassOTPConstants.keychainAccount,
+                    synchronizable: false,
+                    accessGroup: group
+                )
+                #if !targetEnvironment(simulator)
+                guard verify.status == errSecSuccess, verify.data == expectedLocalData else {
+                    throw KeychainVaultError.unexpectedStatus(verify.status == errSecSuccess ? errSecIO : verify.status)
+                }
+                #else
+                _ = verify
+                _ = expectedLocalData
+                #endif
+            }
+            processDefaults.removeObject(forKey: localPendingKey)
+        }
+        processDefaults.set(true, forKey: localCheckedKey)
+
+        // Step B: Order-independent recovery of legacy synchronizable cloud vault into local storage
+        let syncPendingKey = pendingLegacyMigrationKey(group: group, synchronizable: true)
+        let syncCheckedKey = "\(GlassOTPConstants.legacyMigrationCheckedKey).\(group).sync"
+        var syncGroups: [String] = []
+        var seenSyncGroups: Set<String> = []
+        if let savedSyncLegacy = processDefaults.string(forKey: syncPendingKey),
+           !savedSyncLegacy.isEmpty,
+           savedSyncLegacy != group,
+           seenSyncGroups.insert(savedSyncLegacy).inserted {
+            syncGroups.append(savedSyncLegacy)
+        }
+        if !processDefaults.bool(forKey: syncCheckedKey) {
+            let discoveredSync = try discoverLegacyItemsReadOnly(
+                account: GlassOTPConstants.keychainAccount,
+                synchronizable: true,
+                sharedGroup: group
+            )
+            for item in discoveredSync where seenSyncGroups.insert(item.group).inserted {
+                syncGroups.append(item.group)
+            }
+        }
+
+        for legacySyncGroup in syncGroups {
+            processDefaults.set(legacySyncGroup, forKey: syncPendingKey)
+            if let syncRecovered = try mergeAndDeletePendingLegacySyncToLocalUnlocked(
+                legacyGroup: legacySyncGroup,
+                group: group,
+                pendingKey: syncPendingKey
+            ) {
+                latestRecoveredSnapshot = syncRecovered
+            }
+        }
+        processDefaults.set(true, forKey: syncCheckedKey)
         defaults.removeObject(forKey: GlassOTPConstants.pendingMainAppLegacyRetirementRecoveryKey)
-        return recovered
+        return latestRecoveredSnapshot
     }
 
     private func reconcileRetiredCloudStateOnLocalLoadUnlocked() {
@@ -1479,12 +1729,39 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
     ) throws -> Data {
         let pendingKey = pendingLegacyMigrationKey(group: group, synchronizable: synchronizable)
         let checkedKey = "\(GlassOTPConstants.legacyMigrationCheckedKey).\(group).\(synchronizable ? "sync" : "local")"
-        guard let pendingLegacyGroup = processDefaults.string(forKey: pendingKey),
-              !pendingLegacyGroup.isEmpty else {
+
+        var targetGroups: [String] = []
+        var seenGroups: Set<String> = []
+        if let savedPending = processDefaults.string(forKey: pendingKey),
+           !savedPending.isEmpty,
+           savedPending != group,
+           seenGroups.insert(savedPending).inserted {
+            targetGroups.append(savedPending)
+        }
+        if !processDefaults.bool(forKey: checkedKey) {
+            let discovered = try discoverLegacyItemsReadOnly(
+                account: account,
+                synchronizable: synchronizable,
+                sharedGroup: group
+            )
+            for item in discovered where seenGroups.insert(item.group).inserted {
+                targetGroups.append(item.group)
+            }
+        }
+
+        if targetGroups.isEmpty {
+            if !processDefaults.bool(forKey: checkedKey) {
+                processDefaults.set(true, forKey: checkedKey)
+            }
+            if processDefaults.string(forKey: pendingKey) != nil {
+                processDefaults.removeObject(forKey: pendingKey)
+            }
             return expectedData
         }
+
         var verifiedDestData = expectedData
-        if pendingLegacyGroup != group {
+        for pendingLegacyGroup in targetGroups {
+            processDefaults.set(pendingLegacyGroup, forKey: pendingKey)
             let legacyRead = backend.read(
                 account: account,
                 synchronizable: synchronizable,
@@ -1493,17 +1770,16 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
             switch legacyRead.status {
             case errSecItemNotFound:
                 processDefaults.removeObject(forKey: pendingKey)
-                processDefaults.set(true, forKey: checkedKey)
-                return verifiedDestData
+                continue
 
             case errSecSuccess:
                 guard let legacyData = legacyRead.data else {
                     throw synchronizable ? KeychainVaultError.unreadableCloudVault : KeychainVaultError.decodingFailed
                 }
-                if legacyData != expectedData {
+                if legacyData != verifiedDestData {
                     let destSnap: OTPVaultSnapshot
                     do {
-                        destSnap = try decodeSnapshot(expectedData)
+                        destSnap = try decodeSnapshot(verifiedDestData)
                     } catch {
                         throw synchronizable ? KeychainVaultError.unreadableCloudVault : KeychainVaultError.decodingFailed
                     }
@@ -1588,8 +1864,8 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
             guard verify.status == errSecSuccess, verify.data == verifiedDestData else {
                 throw KeychainVaultError.unexpectedStatus(verify.status == errSecSuccess ? errSecIO : verify.status)
             }
+            processDefaults.removeObject(forKey: pendingKey)
         }
-        processDefaults.removeObject(forKey: pendingKey)
         processDefaults.set(true, forKey: checkedKey)
         return verifiedDestData
     }
@@ -1653,15 +1929,17 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
             return nil
         }
 
-        let legacy = backend.read(account: account, synchronizable: synchronizable, accessGroup: nil)
-        if legacy.status == errSecSuccess, let legacyData = legacy.data {
-            if legacy.actualAccessGroup == group {
-                // Concurrent write landed in the shared group between the initial read and legacy scan
+        let all = backend.readAll(account: account, synchronizable: synchronizable)
+        if all.status == errSecSuccess {
+            let candidates = all.items.filter { $0.actualAccessGroup != group }
+            guard let first = candidates.first else {
+                let sharedCheck = backend.read(account: account, synchronizable: synchronizable, accessGroup: group)
                 processDefaults.set(true, forKey: checkedKey)
-                return legacyData
+                return sharedCheck.status == errSecSuccess ? sharedCheck.data : nil
             }
 
-            if let legacyGroup = legacy.actualAccessGroup, !legacyGroup.isEmpty, legacyGroup != group {
+            let legacyData = first.data
+            if let legacyGroup = first.actualAccessGroup, !legacyGroup.isEmpty {
                 processDefaults.set(legacyGroup, forKey: pendingKey)
             }
 
@@ -1684,7 +1962,7 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
                 throw KeychainVaultError.unexpectedStatus(firstVerify.status == errSecSuccess ? errSecIO : firstVerify.status)
             }
 
-            if let legacyGroup = legacy.actualAccessGroup, !legacyGroup.isEmpty {
+            if let legacyGroup = first.actualAccessGroup, !legacyGroup.isEmpty {
                 let deleteStatus = backend.delete(account: account, synchronizable: synchronizable, accessGroup: legacyGroup)
                 guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
                     throw KeychainVaultError.unexpectedStatus(deleteStatus)
@@ -1697,16 +1975,24 @@ public final class KeychainVaultStore: VaultPersistence, @unchecked Sendable {
             }
 
             processDefaults.removeObject(forKey: pendingKey)
-            processDefaults.set(true, forKey: checkedKey)
-            return legacyData
+            if candidates.count == 1 {
+                processDefaults.set(true, forKey: checkedKey)
+                return legacyData
+            }
+            return try completePendingLegacyMigrationDeleteIfNeeded(
+                account: account,
+                synchronizable: synchronizable,
+                group: group,
+                expectedData: legacyData
+            )
         }
 
-        if legacy.status == errSecItemNotFound || legacy.status == errSecMissingEntitlement {
+        if all.status == errSecItemNotFound || all.status == errSecMissingEntitlement {
             processDefaults.set(true, forKey: checkedKey)
             return nil
         }
 
-        throw KeychainVaultError.unexpectedStatus(legacy.status)
+        throw KeychainVaultError.unexpectedStatus(all.status)
     }
 
     @discardableResult
