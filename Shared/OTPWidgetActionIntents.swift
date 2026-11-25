@@ -1,4 +1,5 @@
 import AppIntents
+import AudioToolbox
 import Foundation
 import GlassOTPCore
 import UIKit
@@ -59,6 +60,7 @@ struct CopyOTPWidgetIntent: AppIntent {
 
         await MainActor.run {
             OTPClipboardWriter.copyOTP(codeSnapshot.code)
+            AudioServicesPlaySystemSound(1520)
         }
 
         if account.type == .hotp {
@@ -92,6 +94,9 @@ struct RevealOTPWidgetIntent: AppIntent {
     func perform() async throws -> some IntentResult {
         guard let id = UUID(uuidString: accountIDString) else {
             return .result()
+        }
+        await MainActor.run {
+            AudioServicesPlaySystemSound(1519)
         }
         SharedWidgetStateStore.reveal(accountID: id, for: 15)
         WidgetCenter.shared.reloadAllTimelines()

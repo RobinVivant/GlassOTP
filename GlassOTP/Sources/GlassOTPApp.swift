@@ -39,7 +39,11 @@ struct GlassOTPApp: App {
                 vault.handleIncomingURL(url)
             }
             .onChange(of: scenePhase) { _, newPhase in
-                clock.setActive(newPhase == .active)
+                let isActive = newPhase == .active
+                clock.setActive(isActive)
+                if isActive {
+                    vault.commitPendingForegroundCopyIfNeeded()
+                }
                 security.handleScenePhaseChange(newPhase)
             }
         }

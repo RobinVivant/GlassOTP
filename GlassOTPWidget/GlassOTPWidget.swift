@@ -25,6 +25,7 @@ struct OTPWidgetEntry: TimelineEntry {
     let date: Date
     let items: [OTPWidgetItem]
     let requireTapToReveal: Bool
+    let universalClipboardEnabled: Bool
 }
 
 struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
@@ -71,7 +72,8 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                     wasCopied: false
                 ),
             ],
-            requireTapToReveal: false
+            requireTapToReveal: false,
+            universalClipboardEnabled: SharedClipboardPreferences.isUniversalClipboardEnabled
         )
     }
 
@@ -82,8 +84,14 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
     func timeline(for configuration: OTPWidgetConfigIntent, in context: Context) async -> Timeline<OTPWidgetEntry> {
         let now = Date()
         let accounts = prioritizedAccounts(configuration: configuration)
+        let universalClipboardEnabled = SharedClipboardPreferences.isUniversalClipboardEnabled
         if accounts.isEmpty {
-            let emptyEntry = OTPWidgetEntry(date: now, items: [], requireTapToReveal: configuration.requireTapToReveal)
+            let emptyEntry = OTPWidgetEntry(
+                date: now,
+                items: [],
+                requireTapToReveal: configuration.requireTapToReveal,
+                universalClipboardEnabled: universalClipboardEnabled
+            )
             return Timeline(entries: [emptyEntry], policy: .after(now.addingTimeInterval(300)))
         }
 
@@ -106,7 +114,12 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
 
         let uniqueSortedDates = Array(Set(boundaryDates)).sorted()
         let entries = uniqueSortedDates.map { date in
-            makeEntry(at: date, accounts: accounts, requireTapToReveal: configuration.requireTapToReveal)
+            makeEntry(
+                at: date,
+                accounts: accounts,
+                requireTapToReveal: configuration.requireTapToReveal,
+                universalClipboardEnabled: universalClipboardEnabled
+            )
         }
         return Timeline(entries: entries, policy: .atEnd)
     }
@@ -129,13 +142,19 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
 
     private func makeEntry(at date: Date, configuration: OTPWidgetConfigIntent) -> OTPWidgetEntry {
         let accounts = prioritizedAccounts(configuration: configuration)
-        return makeEntry(at: date, accounts: accounts, requireTapToReveal: configuration.requireTapToReveal)
+        return makeEntry(
+            at: date,
+            accounts: accounts,
+            requireTapToReveal: configuration.requireTapToReveal,
+            universalClipboardEnabled: SharedClipboardPreferences.isUniversalClipboardEnabled
+        )
     }
 
     private func makeEntry(
         at date: Date,
         accounts: [OTPAccount],
-        requireTapToReveal: Bool
+        requireTapToReveal: Bool,
+        universalClipboardEnabled: Bool
     ) -> OTPWidgetEntry {
         let items = accounts.prefix(4).map { account in
             let codeSnapshot = OTPGenerator.snapshot(for: account, at: date)
@@ -163,7 +182,12 @@ struct OTPWidgetTimelineProvider: AppIntentTimelineProvider {
                 wasCopied: wasCopied
             )
         }
-        return OTPWidgetEntry(date: date, items: items, requireTapToReveal: requireTapToReveal)
+        return OTPWidgetEntry(
+            date: date,
+            items: items,
+            requireTapToReveal: requireTapToReveal,
+            universalClipboardEnabled: universalClipboardEnabled
+        )
     }
 }
 
@@ -233,7 +257,7 @@ struct GlassOTPWidgetEntryView: View {
 
                 Spacer()
 
-                actionButton(for: item, compact: true)
+                actionButton(for: item, compact: true, allowLink: false)
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -306,7 +330,7 @@ struct GlassOTPWidgetEntryView: View {
                         }
                     }
 
-                    actionButton(for: item, compact: true)
+                    actionButton(for: item, compact: true, allowLink: true)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -316,7 +340,7 @@ struct GlassOTPWidgetEntryView: View {
     }
 
     private func accessoryRectangularView(item: OTPWidgetItem) -> some View {
-        lockScreenActionButton(for: item) {
+        lockScreenActionContainer(for: item) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(item.title)
@@ -347,7 +371,7 @@ struct GlassOTPWidgetEntryView: View {
     }
 
     private func accessoryCircularView(item: OTPWidgetItem) -> some View {
-        lockScreenActionButton(for: item) {
+        lockScreenActionContainer(for: item) {
             ZStack {
                 AccessoryWidgetBackground()
                 if item.wasCopied {
@@ -382,7 +406,7 @@ struct GlassOTPWidgetEntryView: View {
     }
 
     @ViewBuilder
-    private func lockScreenActionButton<Content: View>(
+    private func lockScreenActionContainer<Content: View>(
         for item: OTPWidgetItem,
         @ViewBuilder content: () -> Content
     ) -> some View {
@@ -392,6 +416,8 @@ struct GlassOTPWidgetEntryView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Reveal \(item.title)")
+        } else if entry.universalClipboardEnabled {
+            content()
         } else {
             Button(intent: CopyOTPWidgetIntent(accountID: item.id)) {
                 content()
@@ -428,7 +454,7 @@ struct GlassOTPWidgetEntryView: View {
     }
 
     @ViewBuilder
-    private func actionButton(for item: OTPWidgetItem, compact: Bool) -> some View {
+    private func actionButton(for item: OTPWidgetItem, compact: Bool, allowLink: Bool) -> some View {
         if item.isMasked {
             Button(intent: RevealOTPWidgetIntent(accountID: item.id)) {
                 Image(systemName: "eye.fill")
@@ -438,6 +464,17 @@ struct GlassOTPWidgetEntryView: View {
             .buttonStyle(.bordered)
             .clipShape(Circle())
             .accessibilityLabel("Reveal \(item.title)")
+        } else if entry.universalClipboardEnabled {
+            let badge = copyBadgeLabel(wasCopied: item.wasCopied, compact: compact)
+            if allowLink {
+                Link(destination: URL(string: "glassotp://account/\(item.id.uuidString)")!) {
+                    badge
+                }
+                .accessibilityLabel("Copy \(item.title)")
+            } else {
+                badge
+                    .accessibilityLabel("Copy \(item.title)")
+            }
         } else {
             Button(intent: CopyOTPWidgetIntent(accountID: item.id)) {
                 Image(systemName: item.wasCopied ? "checkmark" : "doc.on.doc")
@@ -449,6 +486,15 @@ struct GlassOTPWidgetEntryView: View {
             .clipShape(Circle())
             .accessibilityLabel("Copy \(item.title)")
         }
+    }
+
+    private func copyBadgeLabel(wasCopied: Bool, compact: Bool) -> some View {
+        let side: CGFloat = compact ? 28 : 34
+        return Image(systemName: wasCopied ? "checkmark" : "doc.on.doc")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(wasCopied ? Color.green : Color.primary)
+            .frame(width: side, height: side)
+            .background(.quaternary.opacity(0.65), in: Circle())
     }
 }
 

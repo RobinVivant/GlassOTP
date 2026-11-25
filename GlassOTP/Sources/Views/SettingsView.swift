@@ -104,7 +104,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Security & Privacy")
                 } footer: {
-                    Text("When Universal Clipboard is enabled, copied OTP codes sync to your nearby Mac and iPad via Handoff. Turn it off to restrict copied codes to this iPhone for 60 seconds.")
+                    Text("When Universal Clipboard is enabled, copied OTP codes sync to your nearby Mac and iPad via Handoff (tapping a Home Screen or Lock Screen widget briefly opens GlassOTP so iOS broadcasts across devices). Turn it off for silent local-only 60s copies from widgets.")
                 }
 
                 Section("Home & Lock Screen Widgets") {

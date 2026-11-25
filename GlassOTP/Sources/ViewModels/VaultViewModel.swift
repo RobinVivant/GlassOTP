@@ -66,6 +66,7 @@ final class VaultViewModel {
     var universalClipboardEnabled: Bool {
         didSet {
             SharedClipboardPreferences.isUniversalClipboardEnabled = universalClipboardEnabled
+            WidgetCenter.shared.reloadAllTimelines()
         }
     }
 
@@ -73,6 +74,7 @@ final class VaultViewModel {
 
     private let store: KeychainVaultStore
     private var toastDismissTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingForegroundCopyCode: String?
     private static let hideCodesKey = "glassotp.hideCodesInApp"
     private static let dismissBannerKey = "glassotp.dismissAutoCategorizeBanner"
 
@@ -153,14 +155,31 @@ final class VaultViewModel {
         }
     }
 
-    func copyCode(for account: OTPAccount, at date: Date = Date()) {
+    func commitPendingForegroundCopyIfNeeded() {
+        guard let pending = pendingForegroundCopyCode else { return }
+        pendingForegroundCopyCode = nil
+        OTPClipboardWriter.copyOTP(pending)
+        let generator = UINotificationFeedbackGenerator()
+        generator.prepare()
+        generator.notificationOccurred(.success)
+    }
+
+    func copyCode(for account: OTPAccount, at date: Date = Date(), reloadWidgets: Bool = false) {
         let snapshot = OTPGenerator.snapshot(for: account, at: date)
         OTPClipboardWriter.copyOTP(snapshot.code)
 
         let generator = UINotificationFeedbackGenerator()
+        generator.prepare()
         generator.notificationOccurred(.success)
 
+        if UIApplication.shared.applicationState != .active {
+            pendingForegroundCopyCode = snapshot.code
+        }
+
         SharedWidgetStateStore.recordCopy(accountID: account.id, at: date)
+        if reloadWidgets {
+            WidgetCenter.shared.reloadAllTimelines()
+        }
         showToast(title: account.displayTitle, formattedCode: snapshot.formattedCode)
     }
 
@@ -377,14 +396,18 @@ final class VaultViewModel {
         if scheme == "glassotp",
            url.host?.lowercased() == "account",
            let idString = url.pathComponents.dropFirst().first,
-           let accountID = UUID(uuidString: idString),
-           let match = accounts.first(where: { $0.id == accountID }) {
-            if let folderID = match.folderID {
-                selectedFolderID = folderID
-            } else {
-                selectedFolderID = nil
+           let accountID = UUID(uuidString: idString) {
+            if accounts.first(where: { $0.id == accountID }) == nil {
+                reloadFromStore()
             }
-            copyCode(for: match)
+            if let match = accounts.first(where: { $0.id == accountID }) {
+                if let folderID = match.folderID {
+                    selectedFolderID = folderID
+                } else {
+                    selectedFolderID = nil
+                }
+                copyCode(for: match, reloadWidgets: true)
+            }
         }
     }
 
