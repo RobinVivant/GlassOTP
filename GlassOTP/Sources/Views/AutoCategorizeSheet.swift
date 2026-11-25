@@ -41,11 +41,18 @@ struct AutoCategorizeSheet: View {
                 AmbientGlassBackground()
 
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
+                    LazyVStack(alignment: .leading, spacing: 8) {
                         summaryCard
+                            .padding(.bottom, 8)
 
                         ForEach(groupedCategories, id: \.category) { group in
-                            categorySection(category: group.category, items: group.items)
+                            Section {
+                                ForEach(group.items) { item in
+                                    itemRow(item)
+                                }
+                            } header: {
+                                sectionHeader(category: group.category, count: group.items.count)
+                            }
                         }
                     }
                     .padding(16)
@@ -121,87 +128,115 @@ struct AutoCategorizeSheet: View {
         )
     }
 
-    private func categorySection(category: OTPCategory, items: [CategorizationItem]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: category.symbolName)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Color.accentColor)
-                Text(category.displayName.uppercased())
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(items.count)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 4)
-
-            LazyVStack(spacing: 8) {
-                ForEach(items) { item in
-                    let isSelected = selectedIDs.contains(item.id)
-                    HStack(spacing: 12) {
-                        Button {
-                            if isSelected {
-                                selectedIDs.remove(item.id)
-                            } else {
-                                selectedIDs.insert(item.id)
-                            }
-                        } label: {
-                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                                .font(.title3)
-                                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
-                        }
-                        .buttonStyle(.plain)
-
-                        BrandAvatarView(
-                            account: item.account,
-                            size: 38,
-                            logoRevision: vault.logoCacheRevision
-                        )
-                        .equatable()
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.account.displayTitle)
-                                .font(.subheadline.weight(.semibold))
-                                .lineLimit(1)
-                            HStack(spacing: 6) {
-                                if let matched = item.matchedBrand {
-                                    Text(matched.svgPath != nil ? "Vector logo" : matched.title)
-                                        .font(.caption2.weight(.medium))
-                                        .foregroundStyle(Color.accentColor)
-                                } else if let domain = item.inferredLogoDomain {
-                                    Text(domain)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let current = item.currentFolderName {
-                                    Text("• from \(current)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                }
-                            }
-                            .lineLimit(1)
-                        }
-
-                        Spacer(minLength: 4)
-
-                        Picker("Category", selection: Binding(
-                            get: { assignments[item.id] ?? item.category },
-                            set: { assignments[item.id] = $0 }
-                        )) {
-                            ForEach(OTPCategory.allCases) { cat in
-                                Label(cat.displayName, systemImage: cat.symbolName).tag(cat)
-                            }
-                        }
-                        .labelsHidden()
-                        .tint(.secondary)
-                    }
-                    .padding(12)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-            }
+    private func sectionHeader(category: OTPCategory, count: Int) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: category.symbolName)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(Color.accentColor)
+            Text(category.displayName.uppercased())
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text("\(count)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
+        .padding(.horizontal, 4)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+    }
+
+    private func itemRow(_ item: CategorizationItem) -> some View {
+        let isSelected = selectedIDs.contains(item.id)
+        let currentCategory = assignments[item.id] ?? item.category
+
+        return HStack(spacing: 12) {
+            Button {
+                if isSelected {
+                    selectedIDs.remove(item.id)
+                } else {
+                    selectedIDs.insert(item.id)
+                }
+            } label: {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+
+            BrandAvatarView(
+                account: item.account,
+                size: 38,
+                logoRevision: vault.logoCacheRevision
+            )
+            .equatable()
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.account.displayTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                HStack(spacing: 4) {
+                    if let matched = item.matchedBrand {
+                        Text(matched.svgPath != nil ? "Vector logo" : matched.title)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(Color.accentColor)
+                            .fixedSize(horizontal: true, vertical: false)
+                    } else if let domain = item.inferredLogoDomain {
+                        Text(domain)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let current = item.currentFolderName {
+                        Text("• from \(current)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .lineLimit(1)
+                .truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+
+            Menu {
+                ForEach(OTPCategory.allCases) { cat in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            assignments[item.id] = cat
+                        }
+                    } label: {
+                        if cat == currentCategory {
+                            Label(cat.displayName, systemImage: "checkmark")
+                        } else {
+                            Label(cat.displayName, systemImage: cat.symbolName)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: currentCategory.symbolName)
+                        .font(.caption.weight(.semibold))
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.quaternary.opacity(0.65), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .accessibilityLabel("Change category for \(item.account.displayTitle), currently \(currentCategory.displayName)")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+        )
     }
 
     private func applyNow() {

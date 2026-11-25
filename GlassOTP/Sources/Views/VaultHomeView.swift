@@ -151,7 +151,7 @@ struct VaultHomeView: View {
 
     private var populatedVaultView: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 18) {
                 if !vault.folders.isEmpty {
                     folderFilterBar
                 }

@@ -29,6 +29,9 @@ struct GlassOTPApp: App {
                 if ProcessInfo.processInfo.arguments.contains("--demo-seed") {
                     vault.seedDemoDataIfNeeded()
                 }
+                if ProcessInfo.processInfo.arguments.contains("--open-auto-categorize") {
+                    vault.showingAutoCategorizeSheet = true
+                }
                 #endif
                 await security.unlockOnLaunchIfNeeded()
             }
